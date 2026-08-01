@@ -111,6 +111,20 @@ def test_fresh_prices_respects_expires_at_in_the_past(conn):
     assert rows == []
 
 
+def test_reinsert_refreshes_fx_rate_and_landed(conn):
+    store.insert_prices(conn, [make_record()], now="2026-08-01T06:00:00Z")
+    store.insert_prices(
+        conn,
+        [make_record(fx_rate=0.0105, landed_usd=410.0)],
+        now="2026-08-02T00:00:00Z",
+    )
+    row = conn.execute("SELECT * FROM price_history").fetchone()
+    assert store.count_rows(conn) == 1
+    assert row["landed_usd"] == 410.0
+    assert row["fx_rate"] == 0.0105
+    assert row["last_seen_at"] == "2026-08-02T00:00:00Z"
+
+
 def test_fresh_prices_keeps_row_with_future_expiry(conn):
     store.insert_prices(
         conn,

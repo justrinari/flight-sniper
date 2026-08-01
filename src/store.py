@@ -110,7 +110,10 @@ INSERT INTO price_history (
   depart_date, return_date, price_local, currency, fx_rate, landed_usd,
   airline, transfers, duration_min, duration_to_min, expires_at, search_url
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT DO UPDATE SET last_seen_at = excluded.last_seen_at
+ON CONFLICT DO UPDATE SET
+  last_seen_at = excluded.last_seen_at,
+  fx_rate = excluded.fx_rate,
+  landed_usd = excluded.landed_usd
 """
 
 
