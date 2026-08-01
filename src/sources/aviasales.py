@@ -73,6 +73,7 @@ def parse_prices_for_dates(
     payload: dict, market: str, currency: Optional[str] = None
 ) -> list[PriceRecord]:
     records: list[PriceRecord] = []
+    payload_currency = payload.get("currency")
     for item in payload.get("data") or []:
         try:
             depart_date = _date_part(item["departure_at"])
@@ -98,7 +99,9 @@ def parse_prices_for_dates(
                     depart_date=depart_date,
                     return_date=return_date,
                     price_local=price_local,
-                    currency=str(item.get("currency") or currency or "").lower(),
+                    currency=str(
+                        item.get("currency") or payload_currency or currency or ""
+                    ).lower(),
                     airline=str(item.get("airline") or ""),
                     transfers=int(item.get("transfers") or 0),
                     duration_min=int(item.get("duration") or 0),

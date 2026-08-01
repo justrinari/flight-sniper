@@ -162,3 +162,12 @@ def test_non_positive_price_is_skipped():
 def test_zero_duration_to_becomes_none():
     payload = {"data": [dict(PAYLOAD["data"][0], duration_to=0)]}
     assert aviasales.parse_prices_for_dates(payload, market="kg")[0].duration_to_min is None
+
+
+def test_top_level_currency_wins_over_argument():
+    payload = {
+        "currency": "rub",
+        "data": [{k: v for k, v in PAYLOAD["data"][0].items() if k != "currency"}],
+    }
+    records = aviasales.parse_prices_for_dates(payload, market="kg", currency="kgs")
+    assert records[0].currency == "rub"
