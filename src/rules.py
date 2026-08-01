@@ -53,3 +53,33 @@ def compute_baseline(
         minimum=min(numbers),
         anomaly_threshold=percentile(numbers, anomaly_percentile),
     )
+
+
+EMOJI = {GREEN: "🟢", YELLOW: "🟡", GRAY: "⚪"}
+
+
+def classify(landed_usd: float, baseline: Optional[Baseline], cfg) -> str:
+    """GREEN — покупать, YELLOW — упомянуть в дайджесте, GRAY — фон.
+
+    В v1 GREEN ставится по кэшу; в v1.1 BUY-алерт требует подтверждения Amadeus.
+    """
+    if landed_usd < cfg.abs_threshold_usd:
+        return GREEN
+    if baseline is None:
+        return GRAY
+    if landed_usd < baseline.anomaly_threshold:
+        return GREEN
+    if landed_usd < baseline.median * (1.0 - cfg.yellow_delta):
+        return YELLOW
+    return GRAY
+
+
+def delta_to_median(landed_usd: float, baseline: Optional[Baseline]) -> Optional[float]:
+    """Относительное отклонение от медианы: -0.15 = на 15% дешевле."""
+    if baseline is None or baseline.median == 0:
+        return None
+    return landed_usd / baseline.median - 1.0
+
+
+def level_emoji(level: str) -> str:
+    return EMOJI.get(level, "⚪")
