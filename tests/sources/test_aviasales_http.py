@@ -98,6 +98,15 @@ def test_token_never_appears_in_error_text(session):
 
 
 @responses.activate
+def test_non_object_json_raises_aviasales_error(session):
+    responses.add(responses.GET, URL, json=["не", "то"], status=200)
+    with pytest.raises(aviasales.AviasalesError):
+        aviasales.fetch_prices_for_dates(
+            session, "TOKEN", "FRU", "HKT", "kg", "kgs", "2026-10", "2026-10"
+        )
+
+
+@responses.activate
 def test_scan_all_covers_routes_markets_and_return_months(session, config_stub):
     responses.add(responses.GET, URL, json=PAYLOAD, status=200)
     records, errors = aviasales.scan_all(session, "TOKEN", config_stub)

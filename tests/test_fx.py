@@ -44,6 +44,22 @@ def test_fetch_usd_rates_raises_on_http_error(session):
         fx.fetch_usd_rates(session)
 
 
+@responses.activate
+def test_missing_rates_key_raises_fx_error(session):
+    responses.add(responses.GET, fx.FX_URL, json={"result": "success"}, status=200)
+    with pytest.raises(fx.FxError, match="rates"):
+        fx.fetch_usd_rates(session)
+
+
+@responses.activate
+def test_rates_of_wrong_type_raises_fx_error(session):
+    responses.add(
+        responses.GET, fx.FX_URL, json={"result": "success", "rates": "нет"}, status=200
+    )
+    with pytest.raises(fx.FxError):
+        fx.fetch_usd_rates(session)
+
+
 def test_usd_per_unit_inverts_the_rate():
     assert fx.usd_per_unit({"kgs": 87.5}, "kgs") == pytest.approx(1 / 87.5)
 
@@ -122,3 +138,22 @@ def test_enrich_skips_records_with_unknown_currency():
         duration_min=600,
     )
     assert fx.enrich([record], cfg_rates, None) == []
+
+
+def test_enrich_logs_dropped_records(caplog):
+    record = PriceRecord(
+        source="aviasales_cache",
+        origin="FRU",
+        destination="HKT",
+        market="xx",
+        depart_date="2026-10-12",
+        return_date=None,
+        price_local=100.0,
+        currency="zzz",
+        airline="KC",
+        transfers=0,
+        duration_min=600,
+    )
+    with caplog.at_level("WARNING"):
+        assert fx.enrich([record], {"kgs": 87.5}, None) == []
+    assert "zzz" in caplog.text

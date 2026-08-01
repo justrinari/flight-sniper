@@ -192,6 +192,8 @@ def _get(session: requests.Session, path: str, params: dict, token: str) -> dict
         raise AviasalesError(f"{path}: {exc}") from exc
     except ValueError as exc:
         raise AviasalesError(f"{path}: ответ не является JSON") from exc
+    if not isinstance(payload, dict):
+        raise AviasalesError(f"{path}: ответ не является объектом JSON")
     if payload.get("success") is False:
         raise AviasalesError(f"{path}: {payload.get('error', 'unknown error')}")
     return payload

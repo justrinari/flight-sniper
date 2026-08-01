@@ -6,6 +6,7 @@ fx_rate хранится в каждой записи, чтобы аномали
 
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
 import requests
@@ -14,6 +15,8 @@ from src.models import PriceRecord
 
 FX_URL = "https://open.er-api.com/v6/latest/USD"
 TIMEOUT = 20
+
+LOG = logging.getLogger(__name__)
 
 
 class FxError(RuntimeError):
@@ -30,7 +33,10 @@ def fetch_usd_rates(session: requests.Session, url: str = FX_URL) -> dict[str, f
         raise FxError(f"курс недоступен: {exc}") from exc
     if payload.get("result") != "success":
         raise FxError(f"курс недоступен: {payload.get('error-type', 'unknown')}")
-    return {str(k).lower(): float(v) for k, v in payload["rates"].items()}
+    rates = payload.get("rates")
+    if not isinstance(rates, dict):
+        raise FxError("курс недоступен: в ответе нет rates")
+    return {str(k).lower(): float(v) for k, v in rates.items()}
 
 
 def usd_per_unit(rates: dict[str, float], currency: str) -> float:
@@ -53,11 +59,21 @@ def enrich(
 ) -> list[PriceRecord]:
     """Проставляет fx_rate и landed_usd. Записи с неизвестной валютой отбрасывает."""
     enriched: list[PriceRecord] = []
+    dropped_count = 0
+    dropped_currencies: set[str] = set()
     for record in records:
         try:
             rate = usd_per_unit(rates, record.currency)
         except FxError:
+            dropped_count += 1
+            dropped_currencies.add(record.currency)
             continue
         markup = cfg.markup_for(record.currency) if cfg is not None else 0.0
         enriched.append(record.with_landed(rate, landed_usd(record.price_local, rate, markup)))
+    if dropped_count:
+        LOG.warning(
+            "отброшено %d записей с неизвестной валютой: %s",
+            dropped_count,
+            sorted(dropped_currencies),
+        )
     return enriched
