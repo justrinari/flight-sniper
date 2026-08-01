@@ -1,0 +1,28 @@
+# GitHub отключает cron-воркфлоу после 60 дней без активности в репозитории.
+# Пуш в ветку data такой активностью не считается, поэтому раз в 20 дней
+# делаем пустой коммит в main.
+name: keepalive
+
+on:
+  schedule:
+    - cron: "0 5 */20 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flight-sniper-repo
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empty commit
+        run: |
+          git config user.name "flight-sniper[bot]"
+          git config user.email "flight-sniper@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive $(date -u +%F)"
+          git push origin HEAD:main

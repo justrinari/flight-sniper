@@ -1,0 +1,33 @@
+name: digest
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 09:00 Asia/Bishkek (UTC+6)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flight-sniper-repo
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore database
+        run: bash scripts/db_pull.sh
+      - name: Send digest
+        run: python monitor.py digest
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      - name: Persist database
+        run: bash scripts/db_push.sh "digest $(date -u +%Y-%m-%dT%H:%M:%SZ)"

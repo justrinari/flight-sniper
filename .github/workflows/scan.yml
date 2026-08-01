@@ -1,0 +1,42 @@
+name: scan
+
+on:
+  schedule:
+    - cron: "5 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Прогнать бэкфилл перед сканом"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flight-sniper-repo
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore database
+        run: bash scripts/db_pull.sh
+      - name: Backfill
+        if: inputs.backfill
+        run: python monitor.py backfill
+        env:
+          TP_TOKEN: ${{ secrets.TP_TOKEN }}
+      - name: Scan
+        run: python monitor.py scan
+        env:
+          TP_TOKEN: ${{ secrets.TP_TOKEN }}
+      - name: Persist database
+        run: bash scripts/db_push.sh "scan $(date -u +%Y-%m-%dT%H:%M:%SZ)"
