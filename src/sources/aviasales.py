@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional, Sequence
+
+import requests
 
 from src.models import PriceRecord
 
@@ -120,3 +123,101 @@ def filter_records(records: Sequence[PriceRecord], cfg) -> list[PriceRecord]:
     filtered = filter_by_month(records, cfg.departure_month)
     filtered = filter_by_nights(filtered, cfg.nights_range)
     return filter_by_transfer_time(filtered, cfg.max_transfer_hours)
+
+
+LOG = logging.getLogger(__name__)
+TIMEOUT = 30
+DEFAULT_LIMIT = 100
+
+
+class AviasalesError(RuntimeError):
+    """Ошибка обращения к Data API."""
+
+
+def _get(session: requests.Session, path: str, params: dict) -> dict:
+    try:
+        response = session.get(f"{BASE_URL}/{path}", params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise AviasalesError(f"{path}: {exc}") from exc
+    except ValueError as exc:
+        raise AviasalesError(f"{path}: ответ не является JSON") from exc
+    if payload.get("success") is False:
+        raise AviasalesError(f"{path}: {payload.get('error', 'unknown error')}")
+    return payload
+
+
+def fetch_prices_for_dates(
+    session: requests.Session,
+    token: str,
+    origin: str,
+    destination: str,
+    market: str,
+    currency: str,
+    departure_at: str,
+    return_at: Optional[str],
+    one_way: bool = False,
+    limit: int = DEFAULT_LIMIT,
+) -> list[PriceRecord]:
+    params = {
+        "origin": origin,
+        "destination": destination,
+        "departure_at": departure_at,
+        "currency": currency,
+        "market": market,
+        "sorting": "price",
+        "direct": "false",
+        "one_way": "true" if one_way else "false",
+        "limit": limit,
+        "token": token,
+    }
+    if return_at and not one_way:
+        params["return_at"] = return_at
+    payload = _get(session, "prices_for_dates", params)
+    return parse_prices_for_dates(payload, market=market, currency=currency)
+
+
+def scan_all(session: requests.Session, token: str, cfg) -> tuple[list[PriceRecord], list[str]]:
+    """Полный обход маршрутов × рынков × месяцев возврата.
+
+    Возвращает (записи, тексты ошибок). Падение одного запроса не отменяет скан.
+    """
+    collected: dict[tuple, PriceRecord] = {}
+    errors: list[str] = []
+    return_months = [None] if cfg.one_way else cfg.return_months
+
+    for origin, destination in cfg.routes():
+        for market in cfg.markets:
+            currency = cfg.currency_for(market)
+            for return_at in return_months:
+                try:
+                    records = fetch_prices_for_dates(
+                        session,
+                        token,
+                        origin,
+                        destination,
+                        market,
+                        currency,
+                        cfg.departure_month,
+                        return_at,
+                        one_way=cfg.one_way,
+                    )
+                except AviasalesError as exc:
+                    message = f"{origin}->{destination} [{market}] {return_at}: {exc}"
+                    LOG.warning("скан не удался: %s", message)
+                    errors.append(message)
+                    continue
+                for record in filter_records(records, cfg):
+                    key = (
+                        record.market,
+                        record.origin,
+                        record.destination,
+                        record.depart_date,
+                        record.return_date,
+                        record.airline,
+                        record.transfers,
+                        record.price_local,
+                    )
+                    collected.setdefault(key, record)
+    return list(collected.values()), errors
