@@ -125,6 +125,16 @@ def test_reinsert_refreshes_fx_rate_and_landed(conn):
     assert row["last_seen_at"] == "2026-08-02T00:00:00Z"
 
 
+def test_duplicates_within_one_batch_collapse(conn):
+    inserted = store.insert_prices(
+        conn,
+        [make_record(), make_record(), make_record(price_local=1.0)],
+        now="2026-08-01T06:00:00Z",
+    )
+    assert inserted == 2
+    assert store.count_rows(conn) == 2
+
+
 def test_fresh_prices_keeps_row_with_future_expiry(conn):
     store.insert_prices(
         conn,
