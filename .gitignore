@@ -7,3 +7,4 @@ venv/
 data/*.sqlite
 data/*.sqlite-journal
 .env
+flight-sniper-spec.md
