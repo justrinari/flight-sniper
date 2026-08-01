@@ -221,3 +221,55 @@ def scan_all(session: requests.Session, token: str, cfg) -> tuple[list[PriceReco
                     )
                     collected.setdefault(key, record)
     return list(collected.values()), errors
+
+
+def parse_grouped_prices(payload: dict, market: str, currency: str) -> list[PriceRecord]:
+    """grouped_prices отдаёт словарь {дата: оффер} — раскладываем в плоский список."""
+    data = payload.get("data") or {}
+    items = list(data.values()) if isinstance(data, dict) else list(data)
+    return parse_prices_for_dates({"data": items}, market=market, currency=currency)
+
+
+def fetch_grouped_prices(
+    session: requests.Session,
+    token: str,
+    origin: str,
+    destination: str,
+    market: str,
+    currency: str,
+    departure_at: str,
+) -> list[PriceRecord]:
+    params = {
+        "origin": origin,
+        "destination": destination,
+        "departure_at": departure_at,
+        "group_by": "departure_at",
+        "currency": currency,
+        "market": market,
+        "direct": "false",
+        "token": token,
+    }
+    payload = _get(session, "grouped_prices", params)
+    return parse_grouped_prices(payload, market=market, currency=currency)
+
+
+def backfill(session: requests.Session, token: str, cfg) -> tuple[list[PriceRecord], list[str]]:
+    """Однократный старт: минимальная цена на каждый день месяца по каждому рынку."""
+    collected: list[PriceRecord] = []
+    errors: list[str] = []
+    for origin, destination in cfg.routes():
+        for market in cfg.markets:
+            currency = cfg.currency_for(market)
+            try:
+                records = fetch_grouped_prices(
+                    session, token, origin, destination, market, currency, cfg.departure_month
+                )
+            except AviasalesError as exc:
+                message = f"backfill {origin}->{destination} [{market}]: {exc}"
+                LOG.warning("%s", message)
+                errors.append(message)
+                continue
+            # Бэкфилл — историческая база, коридор ночей здесь не применяем:
+            # grouped_prices отдаёт по одному самому дешёвому варианту на дату.
+            collected.extend(filter_by_month(records, cfg.departure_month))
+    return collected, errors
