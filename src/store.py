@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone as _timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+
+from src.models import PriceRecord
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS price_history (
@@ -100,11 +103,6 @@ def get_meta(conn: sqlite3.Connection, key: str, default: Optional[str] = None) 
 def all_meta(conn: sqlite3.Connection) -> dict[str, str]:
     return {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM meta")}
 
-
-from datetime import datetime, timedelta, timezone as _timezone  # noqa: E402
-from typing import Iterable  # noqa: E402
-
-from src.models import PriceRecord  # noqa: E402
 
 _INSERT = """
 INSERT INTO price_history (
