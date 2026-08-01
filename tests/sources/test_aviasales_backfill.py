@@ -67,6 +67,7 @@ def test_fetch_grouped_prices_sends_group_by(session):
     )
     assert "group_by=departure_at" in responses.calls[0].request.url
     assert "departure_at=2026-10" in responses.calls[0].request.url
+    assert "token=" not in responses.calls[0].request.url
 
 
 @responses.activate

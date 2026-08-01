@@ -134,9 +134,14 @@ class AviasalesError(RuntimeError):
     """Ошибка обращения к Data API."""
 
 
-def _get(session: requests.Session, path: str, params: dict) -> dict:
+def _get(session: requests.Session, path: str, params: dict, token: str) -> dict:
     try:
-        response = session.get(f"{BASE_URL}/{path}", params=params, timeout=TIMEOUT)
+        response = session.get(
+            f"{BASE_URL}/{path}",
+            params=params,
+            headers={"X-Access-Token": token},
+            timeout=TIMEOUT,
+        )
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
@@ -170,11 +175,10 @@ def fetch_prices_for_dates(
         "direct": "false",
         "one_way": "true" if one_way else "false",
         "limit": limit,
-        "token": token,
     }
     if return_at and not one_way:
         params["return_at"] = return_at
-    payload = _get(session, "prices_for_dates", params)
+    payload = _get(session, "prices_for_dates", params, token)
     return parse_prices_for_dates(payload, market=market, currency=currency)
 
 
@@ -247,9 +251,8 @@ def fetch_grouped_prices(
         "currency": currency,
         "market": market,
         "direct": "false",
-        "token": token,
     }
-    payload = _get(session, "grouped_prices", params)
+    payload = _get(session, "grouped_prices", params, token)
     return parse_grouped_prices(payload, market=market, currency=currency)
 
 
