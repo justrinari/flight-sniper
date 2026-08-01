@@ -111,6 +111,16 @@ def test_fresh_prices_respects_expires_at_in_the_past(conn):
     assert rows == []
 
 
+def test_fresh_prices_keeps_row_with_future_expiry(conn):
+    store.insert_prices(
+        conn,
+        [make_record(price_local=38000.0, expires_at="2026-08-05T00:00:00Z")],
+        now="2026-08-01T00:00:00Z",
+    )
+    rows = store.fresh_prices(conn, "FRU", "HKT", now="2026-08-01T12:00:00Z", ttl_hours=48)
+    assert len(rows) == 1
+
+
 def test_prune_removes_old_rows(conn):
     store.insert_prices(conn, [make_record()], now="2026-01-01T00:00:00Z")
     store.insert_prices(conn, [make_record(price_local=1.0)], now="2026-08-01T00:00:00Z")

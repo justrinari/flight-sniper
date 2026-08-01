@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
 import requests
@@ -39,6 +40,35 @@ def _date_part(value: Optional[str]) -> Optional[str]:
     return str(value)[:10]
 
 
+def _normalize_expires_at(value) -> Optional[str]:
+    """Приводит expires_at к канонической форме '2026-08-03T00:00:00Z'.
+
+    Документация v3 это поле не описывает; legacy-эндпоинт отдавал Unix-таймстамп.
+    Всё, что не распознали, обнуляем: лучше показать запись лишний раз,
+    чем молча объявить протухшим весь кэш.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    text = str(value).strip()
+    if text.isdigit():
+        return datetime.fromtimestamp(float(text), tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def parse_prices_for_dates(
     payload: dict, market: str, currency: Optional[str] = None
 ) -> list[PriceRecord]:
@@ -48,6 +78,17 @@ def parse_prices_for_dates(
             depart_date = _date_part(item["departure_at"])
             if depart_date is None:
                 continue
+            return_date = _date_part(item.get("return_at"))
+            date.fromisoformat(depart_date)
+            if return_date is not None:
+                date.fromisoformat(return_date)
+            price_local = float(item["price"])
+            if price_local <= 0:
+                continue
+            duration_to = item.get("duration_to")
+            duration_to_min = int(duration_to) if duration_to is not None else None
+            if duration_to_min is not None and duration_to_min <= 0:
+                duration_to_min = None
             records.append(
                 PriceRecord(
                     source=SOURCE,
@@ -55,17 +96,15 @@ def parse_prices_for_dates(
                     destination=str(item["destination"]),
                     market=market,
                     depart_date=depart_date,
-                    return_date=_date_part(item.get("return_at")),
-                    price_local=float(item["price"]),
+                    return_date=return_date,
+                    price_local=price_local,
                     currency=str(item.get("currency") or currency or "").lower(),
                     airline=str(item.get("airline") or ""),
                     transfers=int(item.get("transfers") or 0),
                     duration_min=int(item.get("duration") or 0),
-                    duration_to_min=(
-                        int(item["duration_to"]) if item.get("duration_to") is not None else None
-                    ),
+                    duration_to_min=duration_to_min,
                     search_url=full_link(str(item.get("link") or ""), market),
-                    expires_at=item.get("expires_at"),
+                    expires_at=_normalize_expires_at(item.get("expires_at")),
                 )
             )
         except (KeyError, TypeError, ValueError):

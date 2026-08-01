@@ -106,3 +106,59 @@ def test_currency_falls_back_to_argument_when_absent():
     payload = {"data": [{k: v for k, v in PAYLOAD["data"][0].items() if k != "currency"}]}
     records = aviasales.parse_prices_for_dates(payload, market="kg", currency="kgs")
     assert records[0].currency == "kgs"
+
+
+def test_invalid_departure_date_is_skipped():
+    payload = {"data": [dict(PAYLOAD["data"][0], departure_at="2026-10-32T10:00:00+06:00")]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg") == []
+
+
+def test_invalid_return_date_is_skipped():
+    payload = {"data": [dict(PAYLOAD["data"][0], return_at="2026-13-01T10:00:00+06:00")]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg") == []
+
+
+def test_valid_records_survive_alongside_broken_dates():
+    payload = {
+        "data": [
+            dict(PAYLOAD["data"][0], departure_at="2026-10-32T10:00:00+06:00"),
+            PAYLOAD["data"][0],
+        ]
+    }
+    assert len(aviasales.parse_prices_for_dates(payload, market="kg")) == 1
+
+
+def test_expires_at_unix_timestamp_is_normalized():
+    payload = {"data": [dict(PAYLOAD["data"][0], expires_at=1785000000)]}
+    record = aviasales.parse_prices_for_dates(payload, market="kg")[0]
+    assert record.expires_at is not None
+    assert record.expires_at.startswith("20")
+    assert record.expires_at.endswith("Z")
+
+
+def test_expires_at_unix_timestamp_as_string_is_normalized():
+    payload = {"data": [dict(PAYLOAD["data"][0], expires_at="1785000000")]}
+    record = aviasales.parse_prices_for_dates(payload, market="kg")[0]
+    assert record.expires_at.endswith("Z")
+    assert "T" in record.expires_at
+
+
+def test_expires_at_iso_without_zone_gets_utc_marker():
+    payload = {"data": [dict(PAYLOAD["data"][0], expires_at="2026-08-03T00:00:00")]}
+    record = aviasales.parse_prices_for_dates(payload, market="kg")[0]
+    assert record.expires_at == "2026-08-03T00:00:00Z"
+
+
+def test_unparseable_expires_at_becomes_none():
+    payload = {"data": [dict(PAYLOAD["data"][0], expires_at="скоро")]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg")[0].expires_at is None
+
+
+def test_non_positive_price_is_skipped():
+    payload = {"data": [dict(PAYLOAD["data"][0], price=0)]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg") == []
+
+
+def test_zero_duration_to_becomes_none():
+    payload = {"data": [dict(PAYLOAD["data"][0], duration_to=0)]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg")[0].duration_to_min is None
