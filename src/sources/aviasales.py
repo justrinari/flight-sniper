@@ -163,6 +163,8 @@ def filter_by_transfer_time(
 
 def filter_records(records: Sequence[PriceRecord], cfg) -> list[PriceRecord]:
     filtered = filter_by_month(records, cfg.departure_month)
+    if not cfg.one_way:
+        filtered = [r for r in filtered if r.return_date is not None]
     filtered = filter_by_nights(filtered, cfg.nights_range)
     return filter_by_transfer_time(filtered, cfg.max_transfer_hours)
 

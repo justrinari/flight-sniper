@@ -85,6 +85,20 @@ def test_transfer_filter_is_per_route():
     assert len(kept) == 2  # 1300 — единственный на своём маршруте, значит эталон
 
 
+def test_filter_records_drops_one_way_when_round_trip_requested(config_stub):
+    records = [make(ret=None, price=15000.0), make(ret="2026-10-24", price=38000.0)]
+    kept = aviasales.filter_records(records, config_stub)
+    assert [r.price_local for r in kept] == [38000.0]
+
+
+def test_filter_records_keeps_one_way_in_one_way_mode(config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(config_stub, trip_type="one_way")
+    records = [make(ret=None, price=15000.0)]
+    assert len(aviasales.filter_records(records, cfg)) == 1
+
+
 def test_filter_records_applies_all_three(config_stub):
     records = [
         make(depart="2026-10-12", ret="2026-10-24", duration_to=600),  # ок
