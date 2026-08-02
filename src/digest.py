@@ -344,6 +344,36 @@ def _current_prices(summaries: Sequence[RouteSummary]) -> dict[str, Optional[flo
     return {_price_key(s.origin, s.destination): s.best_landed for s in summaries}
 
 
+def _arbitrage_key(finding: "arbitrage.Finding") -> str:
+    """Ключ связки — тот же смысл, что и в arbitrage._flight_key, но с маршрутом:
+    без origin/destination находки с разных маршрутов и одинаковой датой/рейсом
+    схлопнулись бы в один ключ."""
+    return (
+        f"{finding.origin}-{finding.destination}-{finding.depart_date}-"
+        f"{finding.airline}-{finding.transfers}"
+    )
+
+
+def _current_arbitrage(findings: Sequence["arbitrage.Finding"]) -> dict[str, float]:
+    return {_arbitrage_key(f): f.saving_ratio for f in findings}
+
+
+def _arbitrage_reason_new(finding: "arbitrage.Finding") -> str:
+    route = cities.route(finding.origin, finding.destination)
+    day = format_day(finding.depart_date)
+    percent = round(finding.saving_ratio * 100)
+    return f"новый арбитраж: {route} {day} (−{percent}%)"
+
+
+def _arbitrage_reason_changed(finding: "arbitrage.Finding", last_ratio: float) -> str:
+    route = cities.route(finding.origin, finding.destination)
+    day = format_day(finding.depart_date)
+    old_percent = round(last_ratio * 100)
+    new_percent = round(finding.saving_ratio * 100)
+    direction = "усилился" if finding.saving_ratio > last_ratio else "ослаб"
+    return f"арбитраж {direction}: {route} {day} (−{old_percent}% → −{new_percent}%)"
+
+
 def decide_digest(
     conn: sqlite3.Connection, cfg, summaries: Sequence[RouteSummary], now: str
 ) -> DigestDecision:
@@ -389,9 +419,26 @@ def decide_digest(
                     sign = "−" if percent < 0 else "+"
                     reasons.append(f"{route}: цена изменилась на {sign}{abs(percent)}%")
 
+    # Расхождение между рынками у этого владельца структурное — оно есть
+    # почти всегда, поэтому «арбитраж существует» не новость. Новость — то,
+    # что изменилось с прошлой сводки: появилась/исчезла связка или заметно
+    # сдвинулась экономия.
     findings = arbitrage.find(conn, cfg, now=now)
-    if findings:
-        reasons.append("есть арбитражные находки")
+    current_arbitrage = _current_arbitrage(findings)
+    raw_last_arbitrage = store.get_meta(conn, "last_digest_arbitrage")
+    last_arbitrage: dict[str, float] = (
+        json.loads(raw_last_arbitrage) if raw_last_arbitrage else {}
+    )
+    for finding in findings:
+        key = _arbitrage_key(finding)
+        if key not in last_arbitrage:
+            reasons.append(_arbitrage_reason_new(finding))
+        else:
+            change = abs(finding.saving_ratio - last_arbitrage[key])
+            if change >= cfg.digest_quiet_delta:
+                reasons.append(_arbitrage_reason_changed(finding, last_arbitrage[key]))
+    if last_arbitrage and not current_arbitrage:
+        reasons.append("арбитраж исчез")
 
     trends = render_trends(conn, cfg, now=now)
     if trends:
@@ -404,8 +451,18 @@ def decide_digest(
     return DigestDecision(full=bool(reasons), reasons=reasons)
 
 
-def render_quiet(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
-    """Одна-две строки: подтверждение, что система жива, без полотна текста."""
+def render_quiet(
+    summaries: Sequence[RouteSummary],
+    cfg,
+    now: str,
+    findings: Sequence["arbitrage.Finding"] = (),
+) -> str:
+    """Одна-две строки: подтверждение, что система жива, без полотна текста.
+
+    Расхождение между рынками присутствует почти всегда и само по себе не
+    новость (см. decide_digest), но это ценная информация — поэтому даже
+    тихая сводка называет лучшую находку на сегодня, если она есть.
+    """
     local = _local_date(now, cfg.timezone)
     parts = []
     freshest: Optional[str] = None
@@ -422,6 +479,14 @@ def render_quiet(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
     age = format_age(freshest, now)
     if age:
         lines.append(f"проверено {age}")
+    if findings:
+        best = findings[0]
+        route = cities.route(best.origin, best.destination)
+        percent = round(best.saving_ratio * 100)
+        lines.append(
+            f"🔄 лучший арбитраж: {route} −{percent}% "
+            f"({best.cheap_market} дешевле {best.expensive_market})"
+        )
     return "\n".join(lines)
 
 
@@ -431,11 +496,15 @@ def build_digest_text(
     summaries = build_all_summaries(conn, cfg, now=now)
     decision = decide_digest(conn, cfg, summaries, now=now)
     full = force_full or decision.full
+    findings = arbitrage.find(conn, cfg, now=now)
 
-    # Прошлые цены сравниваются со следующей сводкой независимо от того, была
-    # ли эта сводка полной или короткой — иначе после тихого дня сравнение
-    # окажется со сводкой недельной давности.
+    # Прошлые цены и арбитраж сравниваются со следующей сводкой независимо от
+    # того, была ли эта сводка полной или короткой — иначе после тихого дня
+    # сравнение окажется со сводкой недельной давности.
     store.set_meta(conn, "last_digest_prices", json.dumps(_current_prices(summaries)))
+    store.set_meta(
+        conn, "last_digest_arbitrage", json.dumps(_current_arbitrage(findings))
+    )
 
     if force_full and not decision.full:
         LOG.info("дайджест: полная сводка по запросу (force_full)")
@@ -447,7 +516,7 @@ def build_digest_text(
         )
 
     if not full:
-        return render_quiet(summaries, cfg, now=now)
+        return render_quiet(summaries, cfg, now=now, findings=findings)
 
     blocks: list[str] = []
 
@@ -457,7 +526,6 @@ def build_digest_text(
 
     blocks.append(render_digest(summaries, cfg, now=now))
 
-    findings = arbitrage.find(conn, cfg, now=now)
     if findings:
         arb_lines = ["🔄 <b>Кросс-рыночный арбитраж</b>"]
         arb_lines.extend(arbitrage.render_line(f) for f in findings[:5])

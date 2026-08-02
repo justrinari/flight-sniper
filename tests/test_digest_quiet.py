@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from src import digest, store
+from src import arbitrage, digest, store
 from src.models import PriceRecord
 
 
@@ -154,13 +154,113 @@ def test_build_digest_text_dead_man_switch_starts_with_siren(conn, config_stub):
     assert text.startswith("🚨")
 
 
-def test_decide_digest_arbitrage_is_full(conn, config_stub):
+def test_decide_digest_new_arbitrage_is_full(conn, config_stub):
+    """Расхождение kg/ru у этого владельца структурное — оно есть почти всегда,
+    поэтому «арбитраж существует» не повод слать полную сводку (иначе тихого
+    дня не было бы вообще). Повод — то, что арбитраж НОВЫЙ: его не было в
+    last_digest_arbitrage прошлой сводки."""
     quiet_setup(conn)
     seed(conn, 268.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
     seed(conn, 200.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
     summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
     decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
     assert decision.full is True
+    assert any("новый арбитраж" in r for r in decision.reasons)
+
+
+def test_decide_digest_same_arbitrage_is_quiet(conn, config_stub):
+    """Ключевой тест: то же расхождение kg/ru с той же экономией, что и в
+    прошлой сводке (записанной в last_digest_arbitrage), — не новость.
+
+    kg держит цену STABLE_PRICES (270) — она же lastdigest_prices, ru дороже:
+    так меняется только арбитраж, а не сама цена маршрута."""
+    quiet_setup(conn)
+    seed(conn, 270.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 360.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    findings = arbitrage.find(conn, config_stub, now=NOW)
+    store.set_meta(
+        conn, "last_digest_arbitrage", json.dumps(digest._current_arbitrage(findings))
+    )
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+    assert decision.full is False
+    assert decision.reasons == []
+
+
+def test_decide_digest_arbitrage_strengthened_is_full(conn, config_stub):
+    quiet_setup(conn)
+    seed(conn, 270.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 360.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    findings = arbitrage.find(conn, config_stub, now=NOW)
+    old_arbitrage = digest._current_arbitrage(findings)
+    key = next(iter(old_arbitrage))
+    # экономия была ~25%; "прошлая" сводка запомнила её заметно (>порога) ниже
+    old_arbitrage[key] = old_arbitrage[key] - config_stub.digest_quiet_delta - 0.02
+    store.set_meta(conn, "last_digest_arbitrage", json.dumps(old_arbitrage))
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+    assert decision.full is True
+    assert any("арбитраж усилился" in r for r in decision.reasons)
+
+
+def test_decide_digest_new_arbitrage_leg_while_old_stays_is_full(conn, config_stub):
+    """Появилась новая связка (ALA-DPS), при этом старая (ALA-HKT) не изменилась."""
+    quiet_setup(conn)
+    seed(conn, 270.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 360.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    findings = arbitrage.find(conn, config_stub, now=NOW)
+    store.set_meta(
+        conn, "last_digest_arbitrage", json.dumps(digest._current_arbitrage(findings))
+    )
+
+    # теперь появляется вторая связка с расхождением; kg держит цену STABLE_PRICES (331)
+    seed(conn, 331.0, now=SEEN_AT, origin="ALA", destination="DPS", market="kg")
+    seed(conn, 420.0, now=SEEN_AT, origin="ALA", destination="DPS", market="ru")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+    assert decision.full is True
+    assert any("новый арбитраж" in r for r in decision.reasons)
+
+
+def test_decide_digest_arbitrage_disappeared_is_full(conn, config_stub):
+    """Прошлая сводка помнит находку (в meta), а сейчас арбитража нет вообще —
+    рынки сошлись, возможность закрылась."""
+    quiet_setup(conn)  # только kg-market, реального арбитража сейчас нет
+    fake_key = "ALA-HKT-2026-10-12-KC-1"
+    store.set_meta(conn, "last_digest_arbitrage", json.dumps({fake_key: 0.25}))
+
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+    assert decision.full is True
+    assert any("арбитраж исчез" in r for r in decision.reasons)
+
+
+def test_build_digest_text_writes_last_digest_arbitrage_on_full(conn, config_stub):
+    store.set_meta(conn, "last_scan_at", SEEN_AT)
+    seed_stable(conn)
+    seed(conn, 268.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 200.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    digest.build_digest_text(conn, config_stub, now=NOW)
+    saved = json.loads(store.get_meta(conn, "last_digest_arbitrage"))
+    assert saved  # непустой словарь — арбитраж был записан
+
+
+def test_build_digest_text_writes_last_digest_arbitrage_on_quiet(conn, config_stub):
+    quiet_setup(conn)
+    # kg держит цену STABLE_PRICES (270), ru дороже — цена маршрута не меняется,
+    # меняется только наличие арбитража, а его состояние уже записано ниже.
+    seed(conn, 270.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 360.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    findings = arbitrage.find(conn, config_stub, now=NOW)
+    store.set_meta(
+        conn, "last_digest_arbitrage", json.dumps(digest._current_arbitrage(findings))
+    )
+    # ничего не поменялось — сегодня должна быть тихая сводка
+    text = digest.build_digest_text(conn, config_stub, now=NOW)
+    assert "landed USD" not in text
+    saved = json.loads(store.get_meta(conn, "last_digest_arbitrage"))
+    assert saved == digest._current_arbitrage(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +285,25 @@ def test_render_quiet_shows_freshness_of_newest_price(conn, config_stub):
     summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
     text = digest.render_quiet(summaries, config_stub, now=NOW)
     assert "назад" in text or "только что" in text
+
+
+def test_render_quiet_shows_best_arbitrage_when_present(conn, config_stub):
+    seed_stable(conn)
+    seed(conn, 268.0, now=SEEN_AT, origin="ALA", destination="HKT", market="kg")
+    seed(conn, 200.0, now=SEEN_AT, origin="ALA", destination="HKT", market="ru")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    findings = arbitrage.find(conn, config_stub, now=NOW)
+    text = digest.render_quiet(summaries, config_stub, now=NOW, findings=findings)
+    assert "арбитраж" in text
+    assert "Алматы → Пхукет" in text
+    assert len(text.splitlines()) <= 4
+
+
+def test_render_quiet_hides_arbitrage_line_when_no_findings(conn, config_stub):
+    seed_stable(conn)
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    text = digest.render_quiet(summaries, config_stub, now=NOW, findings=[])
+    assert "арбитраж" not in text
 
 
 # ---------------------------------------------------------------------------
