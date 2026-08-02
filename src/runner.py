@@ -65,7 +65,7 @@ def _process_alerts(conn, cfg, session, token, rates, now: str) -> int:
             continue
 
         result = alerts.confirm(session, token, cfg, candidate, rates, now)
-        text = alerts.render_alert(result)
+        text = alerts.render_alert(result, now)
         try:
             notify.send_message(session, bot_token, chat_id, text)
         except notify.TelegramError as exc:

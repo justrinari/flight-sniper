@@ -231,3 +231,75 @@ def test_render_digest_header_different_years(config_stub):
     cfg = dataclasses.replace(config_stub, departure_months=["2026-12", "2027-01"])
     text = digest.render_digest([], cfg, now="2026-08-01T03:00:00Z")
     assert "декабрь 2026 – январь 2027" in text
+
+
+# ---------------------------------------------------------------------------
+# format_age()
+# ---------------------------------------------------------------------------
+
+
+def test_format_age_empty_input_is_empty_string():
+    assert digest.format_age(None, "2026-08-01T06:30:00Z") == ""
+    assert digest.format_age("", "2026-08-01T06:30:00Z") == ""
+
+
+def test_format_age_under_five_minutes_is_just_now():
+    assert digest.format_age("2026-08-01T06:27:00Z", "2026-08-01T06:30:00Z") == "только что"
+
+
+def test_format_age_boundary_five_minutes_is_not_just_now():
+    assert digest.format_age("2026-08-01T06:25:00Z", "2026-08-01T06:30:00Z") == "5 минут назад"
+
+
+def test_format_age_minutes_plural_forms():
+    assert digest.format_age("2026-08-01T06:18:00Z", "2026-08-01T06:30:00Z") == "12 минут назад"
+    assert digest.format_age("2026-08-01T06:09:00Z", "2026-08-01T06:30:00Z") == "21 минуту назад"
+    assert digest.format_age("2026-08-01T06:08:00Z", "2026-08-01T06:30:00Z") == "22 минуты назад"
+
+
+def test_format_age_hours_plural_forms():
+    assert digest.format_age("2026-08-01T05:30:00Z", "2026-08-01T06:30:00Z") == "1 час назад"
+    assert digest.format_age("2026-08-01T04:30:00Z", "2026-08-01T06:30:00Z") == "2 часа назад"
+    assert digest.format_age("2026-08-01T01:30:00Z", "2026-08-01T06:30:00Z") == "5 часов назад"
+
+
+# ---------------------------------------------------------------------------
+# RouteSummary.last_seen_at
+# ---------------------------------------------------------------------------
+
+
+def test_summary_includes_last_seen_at_of_best_offer(conn, config_stub):
+    seed(conn, [312.0], now="2026-08-01T06:00:00Z")
+    summary = digest.build_route_summary(
+        conn, config_stub, "FRU", "HKT", now="2026-08-01T06:30:00Z"
+    )
+    assert summary.last_seen_at == "2026-08-01T06:00:00Z"
+
+
+def test_summary_last_seen_at_is_none_without_data(conn, config_stub):
+    summary = digest.build_route_summary(
+        conn, config_stub, "ALA", "DPS", now="2026-08-01T07:00:00Z"
+    )
+    assert summary.last_seen_at is None
+
+
+def test_render_digest_shows_price_age(config_stub):
+    summaries = [
+        digest.RouteSummary(
+            origin="FRU",
+            destination="HKT",
+            best_landed=312.0,
+            depart_date="2026-10-12",
+            return_date="2026-10-24",
+            airline="KC",
+            transfers=1,
+            market="kg",
+            search_url="https://www.aviasales.kg/search/x",
+            baseline=None,
+            level=rules.GRAY,
+            delta_pct=None,
+            last_seen_at="2026-08-01T06:18:00Z",
+        )
+    ]
+    text = digest.render_digest(summaries, config_stub, now="2026-08-01T06:30:00Z")
+    assert "12 минут назад" in text

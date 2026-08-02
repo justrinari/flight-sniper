@@ -240,6 +240,7 @@ class Candidate:
     gate: Optional[str]
     search_url: Optional[str]
     baseline: Baseline  # в локальной валюте своего рынка, по дневным минимумам
+    last_seen_at: Optional[str] = None
 
     @property
     def route_date_key(self) -> str:
@@ -314,6 +315,7 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                         gate=best["gate"],
                         search_url=best["search_url"],
                         baseline=baseline,
+                        last_seen_at=best["last_seen_at"],
                     )
                 )
 

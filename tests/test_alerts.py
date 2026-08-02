@@ -34,6 +34,7 @@ def candidate(baseline):
         gate="City.Travel",
         search_url="https://www.aviasales.kg/search/x",
         baseline=baseline,
+        last_seen_at="2026-07-31T23:50:00Z",
     )
 
 
@@ -183,7 +184,7 @@ def test_render_buy_alert_contains_expected_pieces(candidate):
         confirmed_usd=417.0,
         note="",
     )
-    text = alerts.render_alert(result)
+    text = alerts.render_alert(result, "2026-08-01T00:10:00Z")
     assert "Алматы" in text and "Пхукет" in text
     assert "$411" in text  # исходная цена кандидата
     assert "$417" in text  # подтверждённая цена
@@ -196,6 +197,19 @@ def test_render_buy_alert_contains_expected_pieces(candidate):
     assert "/bought" in text
 
 
+def test_render_buy_alert_shows_price_age(candidate):
+    result = alerts.ConfirmResult(
+        candidate=candidate,
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36500.0,
+        confirmed_usd=417.0,
+        note="",
+    )
+    # candidate.last_seen_at = 2026-07-31T23:50:00Z, now = 2026-08-01T00:10:00Z -> 20 минут
+    text = alerts.render_alert(result, "2026-08-01T00:10:00Z")
+    assert "20 минут назад" in text
+
+
 def test_render_unconfirmed_alert_is_marked(candidate):
     result = alerts.ConfirmResult(
         candidate=candidate,
@@ -204,7 +218,7 @@ def test_render_unconfirmed_alert_is_marked(candidate):
         confirmed_usd=None,
         note="предложение исчезло из выдачи кэша",
     )
-    text = alerts.render_alert(result)
+    text = alerts.render_alert(result, "2026-08-01T00:10:00Z")
     assert "не подтвердилось" in text or "не подтверж" in text
     assert "/bought" not in text
 
@@ -232,6 +246,6 @@ def test_render_escapes_html(baseline):
         confirmed_usd=417.0,
         note="",
     )
-    text = alerts.render_alert(result)
+    text = alerts.render_alert(result, "2026-08-01T00:10:00Z")
     assert "A&amp;B" in text
     assert "A&B" not in text

@@ -86,6 +86,15 @@ def test_candidate_found_when_today_below_p10(conn, config_stub):
     assert c.baseline.n == 6  # 5 дней истории + сегодняшний день
 
 
+def test_candidate_includes_last_seen_at_of_selected_row(conn, config_stub):
+    for day, price in enumerate([300.0, 305.0, 310.0, 315.0, 320.0], start=20):
+        seed(conn, [price], now=f"2026-07-{day}T06:00:00Z")
+    seed(conn, [200.0], now="2026-08-01T06:00:00Z")
+    candidates = rules.find_candidates(conn, config_stub, now="2026-08-01T07:00:00Z")
+    assert len(candidates) == 1
+    assert candidates[0].last_seen_at == "2026-08-01T06:00:00Z"
+
+
 def test_no_candidate_for_ordinary_price(conn, config_stub):
     for day, price in enumerate([300.0, 305.0, 310.0, 315.0, 320.0], start=20):
         seed(conn, [price], now=f"2026-07-{day}T06:00:00Z")

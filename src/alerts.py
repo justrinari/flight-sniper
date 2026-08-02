@@ -126,7 +126,11 @@ def confirm(session, token, cfg, candidate: rules.Candidate, rates, now) -> Conf
 _GATE_WARNING = "продавец-посредник: поддержка при отмене рейса будет хуже, чем у авиакомпании напрямую"
 
 
-def render_alert(result: ConfirmResult) -> str:
+def render_alert(result: ConfirmResult, now: str) -> str:
+    """`now` нужен, чтобы показать возраст цены кандидата: между обнаружением
+    аномалии и тем, когда владелец прочитает алерт, проходит время, и это
+    ещё важнее знать заранее, чем в дайджесте.
+    """
     c = result.candidate
     route = html.escape(cities.route(c.origin, c.destination))
     price = f"${c.landed_usd:.0f}"
@@ -137,6 +141,10 @@ def render_alert(result: ConfirmResult) -> str:
         header = f"🔍 {route} <b>{price}</b> — кэш видел, но не подтвердилось"
 
     lines = [header, ""]
+
+    age = digest.format_age(c.last_seen_at, now)
+    if age:
+        lines.append(f"цена в кэше {age}")
 
     depart = digest.format_day(c.depart_date)
     if c.return_date:

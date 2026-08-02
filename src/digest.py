@@ -49,6 +49,7 @@ class RouteSummary:
     baseline: Optional[rules.Baseline]
     level: str
     delta_pct: Optional[float]
+    last_seen_at: Optional[str] = None
 
 
 def build_route_summary(
@@ -101,6 +102,7 @@ def build_route_summary(
         baseline=baseline,
         level=rules.classify(float(best["landed_usd"]), baseline, cfg),
         delta_pct=rules.delta_to_median(float(best["landed_usd"]), baseline),
+        last_seen_at=best["last_seen_at"],
     )
 
 
@@ -125,6 +127,44 @@ def format_day(date_iso: Optional[str]) -> str:
     if not date_iso:
         return ""
     return f"{date_iso[8:10]}.{date_iso[5:7]}"
+
+
+_MINUTE_JUST_NOW_THRESHOLD = 5
+
+
+def _minute_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "минуту"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "минуты"
+    return "минут"
+
+
+def _hour_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "час"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "часа"
+    return "часов"
+
+
+def format_age(last_seen_at: Optional[str], now: str) -> str:
+    """Насколько давно цена в последний раз подтвердилась в кэше.
+
+    Показываем это в дайджесте и алерте, чтобы владелец видел свежесть цифры
+    ещё до перехода по ссылке — сам переход уже показал бы устаревшую цену.
+    """
+    if not last_seen_at:
+        return ""
+    seen = datetime.fromisoformat(last_seen_at.replace("Z", "+00:00"))
+    current = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    minutes = max(0, int((current - seen).total_seconds() // 60))
+    if minutes < _MINUTE_JUST_NOW_THRESHOLD:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} {_minute_word(minutes)} назад"
+    hours = minutes // 60
+    return f"{hours} {_hour_word(hours)} назад"
 
 
 def format_transfers(transfers: Optional[int]) -> str:
@@ -183,6 +223,9 @@ def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
             line += f"  {detail}"
         if summary.market:
             line += f"  [{summary.market}]"
+        age = format_age(summary.last_seen_at, now)
+        if age:
+            line += f"  ({age})"
         if summary.search_url:
             line += f'  <a href="{html.escape(summary.search_url, quote=True)}">поиск</a>'
         lines.append(line)
