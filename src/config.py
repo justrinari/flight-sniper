@@ -35,6 +35,7 @@ OVERRIDABLE: dict[str, Any] = {
     "yellow_delta": float,
     "anomaly_percentile": float,
     "cross_market_delta": float,
+    "digest_quiet_delta": float,
     "extra_routes": lambda value: [tuple(pair) for pair in json.loads(value)],
 }
 
@@ -61,6 +62,7 @@ class Config:
     digest_time: str
     timezone: str
     extra_routes: tuple[tuple[str, str], ...] = ()
+    digest_quiet_delta: float = 0.05
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -98,6 +100,7 @@ class Config:
             cache_ttl_hours=int(raw.get("cache_ttl_hours", 48)),
             digest_time=str(raw.get("digest_time", "09:00")),
             timezone=str(raw.get("timezone", "Asia/Bishkek")),
+            digest_quiet_delta=float(raw.get("digest_quiet_delta", 0.05)),
         )
 
     def routes(self) -> list[tuple[str, str]]:

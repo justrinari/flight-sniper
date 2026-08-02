@@ -8,6 +8,8 @@ Baseline считается по всему окну (включая проту�
 from __future__ import annotations
 
 import html
+import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +17,8 @@ from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from src import airlines, arbitrage, cities, rules, store
+
+LOG = logging.getLogger(__name__)
 
 MAX_SCAN_AGE_HOURS = 12
 PRECISION_PERIOD_DAYS = 14
@@ -326,14 +330,131 @@ def precision_block(
     )
 
 
-def build_digest_text(conn: sqlite3.Connection, cfg, now: str) -> str:
+@dataclass(frozen=True)
+class DigestDecision:
+    full: bool
+    reasons: list[str]
+
+
+def _price_key(origin: str, destination: str) -> str:
+    return f"{origin}-{destination}"
+
+
+def _current_prices(summaries: Sequence[RouteSummary]) -> dict[str, Optional[float]]:
+    return {_price_key(s.origin, s.destination): s.best_landed for s in summaries}
+
+
+def decide_digest(
+    conn: sqlite3.Connection, cfg, summaries: Sequence[RouteSummary], now: str
+) -> DigestDecision:
+    """Решает, заслуживает ли сегодняшний день полной сводки или хватит одной строки.
+
+    Полная сводка — единственный признак жизни системы (пока история короче
+    пяти дней, вердиктов baseline ещё нет), поэтому сторож молчания и
+    понедельничный якорь всегда перевешивают тишину в ценах.
+    """
+    reasons: list[str] = []
+
+    switch = dead_man_switch(conn, now)
+    if switch:
+        reasons.append("сканер молчит")
+
+    local = _local_date(now, cfg.timezone)
+    if local.weekday() == 0:
+        reasons.append("понедельник — недельный обзор")
+
+    raw_last = store.get_meta(conn, "last_digest_prices")
+    current_prices = _current_prices(summaries)
+    if raw_last is None:
+        reasons.append("первая сводка — прошлой ещё не было")
+    else:
+        last_prices: dict[str, Optional[float]] = json.loads(raw_last)
+        for summary in summaries:
+            key = _price_key(summary.origin, summary.destination)
+            last_value = last_prices.get(key)
+            current_value = current_prices[key]
+            route = cities.route(summary.origin, summary.destination)
+            if last_value is None and current_value is not None:
+                reasons.append(f"{route}: появились данные")
+            elif last_value is not None and current_value is None:
+                reasons.append(f"{route}: данные пропали")
+            elif (
+                last_value is not None
+                and current_value is not None
+                and last_value != 0
+            ):
+                change = (current_value - last_value) / last_value
+                if abs(change) >= cfg.digest_quiet_delta:
+                    percent = round(change * 100)
+                    sign = "−" if percent < 0 else "+"
+                    reasons.append(f"{route}: цена изменилась на {sign}{abs(percent)}%")
+
+    findings = arbitrage.find(conn, cfg, now=now)
+    if findings:
+        reasons.append("есть арбитражные находки")
+
+    trends = render_trends(conn, cfg, now=now)
+    if trends:
+        reasons.append("есть тренды")
+
+    last_report_at = store.get_meta(conn, "precision_reported_at")
+    if precision_block(conn, now=now, last_report_at=last_report_at):
+        reasons.append("готов отчёт о точности")
+
+    return DigestDecision(full=bool(reasons), reasons=reasons)
+
+
+def render_quiet(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
+    """Одна-две строки: подтверждение, что система жива, без полотна текста."""
+    local = _local_date(now, cfg.timezone)
+    parts = []
+    freshest: Optional[str] = None
+    for summary in summaries:
+        route = cities.route(summary.origin, summary.destination)
+        if summary.best_landed is None:
+            parts.append(f"{route} {cities.PLACEHOLDER}")
+            continue
+        parts.append(f"{route} ${summary.best_landed:.0f}")
+        if summary.last_seen_at and (freshest is None or summary.last_seen_at > freshest):
+            freshest = summary.last_seen_at
+
+    lines = [f"✈️ {local.strftime('%d.%m')} · тихо, цены на месте", " · ".join(parts)]
+    age = format_age(freshest, now)
+    if age:
+        lines.append(f"проверено {age}")
+    return "\n".join(lines)
+
+
+def build_digest_text(
+    conn: sqlite3.Connection, cfg, now: str, force_full: bool = False
+) -> str:
+    summaries = build_all_summaries(conn, cfg, now=now)
+    decision = decide_digest(conn, cfg, summaries, now=now)
+    full = force_full or decision.full
+
+    # Прошлые цены сравниваются со следующей сводкой независимо от того, была
+    # ли эта сводка полной или короткой — иначе после тихого дня сравнение
+    # окажется со сводкой недельной давности.
+    store.set_meta(conn, "last_digest_prices", json.dumps(_current_prices(summaries)))
+
+    if force_full and not decision.full:
+        LOG.info("дайджест: полная сводка по запросу (force_full)")
+    else:
+        LOG.info(
+            "дайджест: %s — %s",
+            "полная" if full else "короткая",
+            "; ".join(decision.reasons) if decision.reasons else "изменений нет",
+        )
+
+    if not full:
+        return render_quiet(summaries, cfg, now=now)
+
     blocks: list[str] = []
 
     switch = dead_man_switch(conn, now)
     if switch:
         blocks.append(switch)
 
-    summaries = build_all_summaries(conn, cfg, now=now)
     blocks.append(render_digest(summaries, cfg, now=now))
 
     findings = arbitrage.find(conn, cfg, now=now)

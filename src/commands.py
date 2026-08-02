@@ -185,7 +185,7 @@ def handle(conn, cfg, command: str, args: list[str], now: str) -> str:
     if command == "/status":
         return _status(conn, cfg, now)
     if command == "/now":
-        return digest.build_digest_text(conn, cfg, now=now)
+        return digest.build_digest_text(conn, cfg, now=now, force_full=True)
     if command == "/threshold":
         return _threshold(conn, cfg, args)
     if command == "/pause":
