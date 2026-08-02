@@ -23,6 +23,7 @@ class PriceRecord:
     duration_min: int
     duration_to_min: Optional[int] = None  # длительность плеча «туда», для фильтра пересадок
     search_url: str = ""
+    gate: Optional[str] = None  # продавец, у которого найдена цена (ОТА или а/к)
     scanned_at: Optional[str] = None  # ISO UTC, проставляется при вставке
     fx_rate: Optional[float] = None  # USD за 1 единицу currency
     landed_usd: Optional[float] = None

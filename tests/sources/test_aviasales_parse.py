@@ -20,6 +20,7 @@ PAYLOAD = {
             "duration_back": 740,
             "link": "/search/FRU1210HKT2410?t=abc",
             "currency": "kgs",
+            "gate": "Trip.com",
         },
         {
             "origin": "FRU",
@@ -171,3 +172,17 @@ def test_top_level_currency_wins_over_argument():
     }
     records = aviasales.parse_prices_for_dates(payload, market="kg", currency="kgs")
     assert records[0].currency == "rub"
+
+
+def test_gate_is_captured():
+    assert aviasales.parse_prices_for_dates(PAYLOAD, market="kg")[0].gate == "Trip.com"
+
+
+def test_missing_gate_becomes_none():
+    payload = {"data": [{k: v for k, v in PAYLOAD["data"][0].items() if k != "gate"}]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg")[0].gate is None
+
+
+def test_blank_gate_becomes_none():
+    payload = {"data": [dict(PAYLOAD["data"][0], gate="   ")]}
+    assert aviasales.parse_prices_for_dates(payload, market="kg")[0].gate is None

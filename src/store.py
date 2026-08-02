@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS price_history (
   duration_min INTEGER,
   duration_to_min INTEGER,
   expires_at TEXT,
-  search_url TEXT
+  search_url TEXT,
+  gate TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_identity ON price_history(
@@ -108,12 +109,13 @@ _INSERT = """
 INSERT INTO price_history (
   scanned_at, last_seen_at, source, origin, destination, market,
   depart_date, return_date, price_local, currency, fx_rate, landed_usd,
-  airline, transfers, duration_min, duration_to_min, expires_at, search_url
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  airline, transfers, duration_min, duration_to_min, expires_at, search_url, gate
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT DO UPDATE SET
   last_seen_at = excluded.last_seen_at,
   fx_rate = excluded.fx_rate,
-  landed_usd = excluded.landed_usd
+  landed_usd = excluded.landed_usd,
+  gate = excluded.gate
 """
 
 
@@ -149,6 +151,7 @@ def insert_prices(conn: sqlite3.Connection, records: Iterable[PriceRecord], now:
                 r.duration_to_min,
                 r.expires_at,
                 r.search_url,
+                r.gate,
             )
             for r in records
         ],

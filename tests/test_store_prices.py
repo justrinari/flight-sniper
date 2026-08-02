@@ -28,6 +28,7 @@ def make_record(**kwargs) -> PriceRecord:
         search_url="https://www.aviasales.kg/search/x",
         fx_rate=0.0114,
         landed_usd=444.0,
+        gate="Trip.com",
     )
     base.update(kwargs)
     return PriceRecord(**base)
@@ -151,3 +152,17 @@ def test_prune_removes_old_rows(conn):
     removed = store.prune(conn, before="2026-06-01T00:00:00Z")
     assert removed == 1
     assert store.count_rows(conn) == 1
+
+
+def test_gate_is_stored(conn):
+    store.insert_prices(conn, [make_record()], now="2026-08-01T06:00:00Z")
+    row = conn.execute("SELECT gate FROM price_history").fetchone()
+    assert row["gate"] == "Trip.com"
+
+
+def test_same_offer_from_another_gate_is_not_a_new_row(conn):
+    store.insert_prices(conn, [make_record()], now="2026-08-01T06:00:00Z")
+    store.insert_prices(conn, [make_record(gate="Wingie")], now="2026-08-01T10:00:00Z")
+    assert store.count_rows(conn) == 1
+    row = conn.execute("SELECT gate FROM price_history").fetchone()
+    assert row["gate"] == "Wingie"

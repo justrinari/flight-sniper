@@ -107,6 +107,7 @@ def parse_prices_for_dates(
                     duration_min=int(item.get("duration") or 0),
                     duration_to_min=duration_to_min,
                     search_url=full_link(str(item.get("link") or ""), market),
+                    gate=(str(item["gate"]).strip() or None) if item.get("gate") else None,
                     expires_at=_normalize_expires_at(item.get("expires_at")),
                 )
             )
