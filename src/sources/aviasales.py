@@ -289,6 +289,7 @@ def fetch_grouped_prices(
     market: str,
     currency: str,
     departure_at: str,
+    one_way: bool = False,
 ) -> list[PriceRecord]:
     params = {
         "origin": origin,
@@ -298,6 +299,7 @@ def fetch_grouped_prices(
         "currency": currency,
         "market": market,
         "direct": "false",
+        "one_way": "true" if one_way else "false",
     }
     payload = _get(session, "grouped_prices", params, token)
     return parse_grouped_prices(payload, market=market, currency=currency)
@@ -312,7 +314,14 @@ def backfill(session: requests.Session, token: str, cfg) -> tuple[list[PriceReco
             currency = cfg.currency_for(market)
             try:
                 records = fetch_grouped_prices(
-                    session, token, origin, destination, market, currency, cfg.departure_month
+                    session,
+                    token,
+                    origin,
+                    destination,
+                    market,
+                    currency,
+                    cfg.departure_month,
+                    one_way=cfg.one_way,
                 )
             except AviasalesError as exc:
                 message = f"backfill {origin}->{destination} [{market}]: {exc}"

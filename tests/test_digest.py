@@ -62,15 +62,45 @@ def test_summary_with_no_data_is_empty(conn, config_stub):
     assert summary.level == rules.GRAY
 
 
-def test_summary_baseline_uses_full_window_not_just_fresh(conn, config_stub):
-    seed(conn, [500.0, 510.0, 520.0, 530.0, 540.0], now="2026-07-10T06:00:00Z")
+def test_baseline_is_built_from_daily_minimums_not_every_offer(conn, config_stub):
+    """Одна точка на день наблюдения, а не все офферы подряд."""
+    for day, price in enumerate([500.0, 510.0, 520.0, 530.0, 540.0], start=20):
+        # по три оффера в день: в выборку должен попасть только минимум
+        seed(conn, [price, price + 30, price + 60], now=f"2026-07-{day}T06:00:00Z")
     seed(conn, [400.0], now="2026-08-01T06:00:00Z")
     summary = digest.build_route_summary(
         conn, config_stub, "FRU", "HKT", now="2026-08-01T07:00:00Z"
     )
     assert summary.baseline is not None
-    assert summary.baseline.n == 6
+    assert summary.baseline.n == 6  # шесть дней, а не восемнадцать офферов
+    assert summary.baseline.median == pytest.approx(515.0)  # медиана дневных минимумов
     assert summary.delta_pct is not None and summary.delta_pct < 0
+
+
+def test_baseline_is_none_until_enough_days_observed(conn, config_stub):
+    """С одним днём истории вердикта нет — это честнее выдуманного."""
+    seed(conn, [400.0, 450.0, 500.0, 550.0, 600.0], now="2026-08-01T06:00:00Z")
+    summary = digest.build_route_summary(
+        conn, config_stub, "FRU", "HKT", now="2026-08-01T07:00:00Z"
+    )
+    assert summary.baseline is None
+    assert summary.level == rules.GRAY
+    assert summary.delta_pct is None
+
+
+def test_cheapest_offer_is_not_automatically_green(conn, config_stub):
+    """Регрессия: минимум сравнивался с перцентилем того же распределения.
+
+    Минимум всегда ниже любого перцентиля своей выборки, поэтому светофор
+    горел зелёным независимо от того, дорого сегодня или дёшево.
+    """
+    cfg = config_stub.with_overrides({"abs_threshold_usd": "1"})
+    for day, price in enumerate([300.0, 305.0, 310.0, 315.0, 320.0], start=20):
+        seed(conn, [price], now=f"2026-07-{day}T06:00:00Z")
+    seed(conn, [318.0], now="2026-08-01T06:00:00Z")  # обычная цена, не находка
+    summary = digest.build_route_summary(conn, cfg, "FRU", "HKT", now="2026-08-01T07:00:00Z")
+    assert summary.best_landed == 318.0
+    assert summary.level == rules.GRAY
 
 
 def test_render_matches_expected_shape(config_stub):

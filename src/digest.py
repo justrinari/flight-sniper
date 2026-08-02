@@ -52,10 +52,13 @@ def build_route_summary(
     conn: sqlite3.Connection, cfg, origin: str, destination: str, now: str
 ) -> RouteSummary:
     window_start = store.shift_days(now, -cfg.baseline_window_days)
-    history = store.recent_prices(conn, origin, destination, since=window_start)
+    # Выборка — история дневных минимумов, а не все офферы: иначе сегодняшний
+    # минимум сравнивался бы с распределением, в котором он сам и есть минимум,
+    # и светофор всегда горел бы зелёным. Пока дней наблюдения мало,
+    # compute_baseline вернёт None — и это честнее выдуманного вердикта.
+    daily = rules.daily_minimums(conn, origin, destination, since=window_start)
     baseline = rules.compute_baseline(
-        [row["landed_usd"] for row in history if row["landed_usd"] is not None],
-        cfg.anomaly_percentile,
+        [price for _, price in daily], cfg.anomaly_percentile
     )
 
     fresh = [

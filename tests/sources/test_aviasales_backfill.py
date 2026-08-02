@@ -71,6 +71,31 @@ def test_fetch_grouped_prices_sends_group_by(session):
 
 
 @responses.activate
+def test_fetch_grouped_prices_defaults_to_round_trip(session):
+    responses.add(responses.GET, URL, json=GROUPED, status=200)
+    aviasales.fetch_grouped_prices(session, "TOKEN", "FRU", "HKT", "kg", "kgs", "2026-10")
+    assert "one_way=false" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_fetch_grouped_prices_honors_one_way(session):
+    responses.add(responses.GET, URL, json=GROUPED, status=200)
+    aviasales.fetch_grouped_prices(
+        session, "TOKEN", "FRU", "HKT", "kg", "kgs", "2026-10", one_way=True
+    )
+    assert "one_way=true" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_backfill_passes_trip_type_from_config(session, config_stub):
+    import dataclasses
+
+    responses.add(responses.GET, URL, json=GROUPED, status=200)
+    aviasales.backfill(session, "TOKEN", dataclasses.replace(config_stub, trip_type="one_way"))
+    assert all("one_way=true" in call.request.url for call in responses.calls)
+
+
+@responses.activate
 def test_backfill_covers_routes_and_markets(session, config_stub):
     responses.add(responses.GET, URL, json=GROUPED, status=200)
     records, errors = aviasales.backfill(session, "TOKEN", config_stub)

@@ -1,12 +1,20 @@
 """Статистика и светофор.
 
-Baseline строится по маршруту в целом за окно (все даты октября вместе):
-по конкретной дате записей слишком мало, чтобы перцентиль что-то значил.
+Baseline строится по маршруту в целом (все даты месяца вместе): по конкретной
+дате вылета записей слишком мало, чтобы перцентиль что-то значил.
+
+Важно, ЧТО именно попадает в выборку. Сравнивать сегодняшнюю минимальную цену
+со всеми ценами подряд бессмысленно: минимум по определению лежит ниже любого
+перцентиля того же распределения, и светофор всегда горел бы зелёным. Поэтому
+выборка — это история ДНЕВНЫХ МИНИМУМОВ (см. daily_minimums): вопрос, на который
+отвечает светофор, звучит как «дешевле ли сегодняшняя лучшая цена, чем бывала
+лучшая цена в прошлые дни».
 """
 
 from __future__ import annotations
 
 import math
+import sqlite3
 from dataclasses import dataclass
 from statistics import median as _median
 from typing import Optional, Sequence
@@ -83,3 +91,20 @@ def delta_to_median(landed_usd: float, baseline: Optional[Baseline]) -> Optional
 
 def level_emoji(level: str) -> str:
     return EMOJI.get(level, "⚪")
+
+
+def daily_minimums(
+    conn: sqlite3.Connection, origin: str, destination: str, since: str
+) -> list[tuple[str, float]]:
+    """Минимальная landed-цена по каждому дню наблюдения, по возрастанию даты.
+
+    Это и есть выборка для baseline: одна точка на день, а не все офферы подряд.
+    """
+    rows = conn.execute(
+        "SELECT substr(last_seen_at, 1, 10) AS day, MIN(landed_usd) AS best"
+        " FROM price_history"
+        " WHERE origin = ? AND destination = ? AND last_seen_at >= ? AND landed_usd IS NOT NULL"
+        " GROUP BY day ORDER BY day",
+        (origin, destination, since),
+    ).fetchall()
+    return [(row["day"], float(row["best"])) for row in rows]
