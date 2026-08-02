@@ -152,9 +152,9 @@ def run_digest(
     conn = _open(db_path)
     cfg = _effective_config(conn, cfg)
 
-    summaries = digest.build_all_summaries(conn, cfg, now=now)
-    text = digest.render_digest(summaries, cfg, now=now)
+    routes = len(cfg.routes())
+    text = digest.build_digest_text(conn, cfg, now=now)
     conn.close()
 
     notify.send_message(session, bot_token, chat_id, text)
-    return {"sent": True, "routes": len(summaries)}
+    return {"sent": True, "routes": routes}

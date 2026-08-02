@@ -14,7 +14,10 @@ from datetime import datetime
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
-from src import airlines, rules, store
+from src import airlines, arbitrage, rules, store
+
+MAX_SCAN_AGE_HOURS = 12
+PRECISION_PERIOD_DAYS = 14
 
 MONTHS_RU = {
     1: "январь",
@@ -177,3 +180,124 @@ def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
         f"${cfg.abs_threshold_usd:.0f}</i>"
     )
     return "\n".join(lines)
+
+
+def dead_man_switch(
+    conn: sqlite3.Connection, now: str, max_age_hours: int = MAX_SCAN_AGE_HOURS
+) -> Optional[str]:
+    """Отличает молчание сканера от честного отсутствия находок.
+
+    Без этого сторожа сломанный скан выглядит как «дешёвых билетов нет» —
+    а это разные вещи.
+    """
+    last_scan_at = store.get_meta(conn, "last_scan_at")
+    if last_scan_at is None:
+        return "🚨 Сканер ни разу не отработал успешно — проверь GitHub Actions."
+    cutoff = store.shift_hours(now, -max_age_hours)
+    if last_scan_at < cutoff:
+        return f"🚨 Сканер молчит с {last_scan_at} — проверь GitHub Actions."
+    return None
+
+
+def render_trends(conn: sqlite3.Connection, cfg, now: str) -> list[str]:
+    """По строке на маршрут: серия снижений или недельная разница, если есть что сказать."""
+    window_start = store.shift_days(now, -cfg.baseline_window_days)
+    lines: list[str] = []
+    for origin, destination in cfg.routes():
+        route = f"{origin}→{destination}"
+        daily = rules.daily_minimums(conn, origin, destination, since=window_start)
+        streak = rules.falling_streak(daily)
+        if streak >= 2:
+            lines.append(f"{route} дешевеет {streak}-й день подряд.")
+            continue
+
+        delta = rules.week_delta(conn, origin, destination, now=now)
+        if delta is not None and abs(delta) >= 0.05:
+            percent = round(abs(delta) * 100)
+            word = "дешевле" if delta < 0 else "дороже"
+            lines.append(f"{route}: на {percent}% {word}, чем неделю назад.")
+    return lines
+
+
+def weekly_manual_block(cfg, now: str) -> Optional[str]:
+    """Раз в неделю (по понедельникам) — напоминание проверить лоукостеров руками."""
+    local = _local_date(now, cfg.timezone)
+    if local.weekday() != 0:
+        return None
+    return "\n".join(
+        [
+            "🧭 <b>Ручная проверка (раз в неделю)</b>",
+            "Метапоиск не видит часть лоукостеров — раз в неделю стоит проверить руками "
+            "склейки через хабы:",
+            '• <a href="https://www.google.com/flights">Дели (DEL)</a> — IndiGo и Air India '
+            "держат дешёвые стыковки в Азию, которых нет в кэше.",
+            '• <a href="https://www.google.com/flights">Куала-Лумпур (KUL)</a> — домашний хаб '
+            "AirAsia, метапоиск часто не индексирует её тарифы.",
+            '• <a href="https://www.google.com/flights">Дубай (DXB)</a> — flydubai закрывает '
+            "стыковки, которых нет в кэше.",
+        ]
+    )
+
+
+def precision_block(
+    conn: sqlite3.Connection, now: str, last_report_at: Optional[str]
+) -> Optional[str]:
+    """Раз в PRECISION_PERIOD_DAYS дней — отчёт о том, сколько алертов подтвердилось."""
+    if last_report_at:
+        cutoff = store.shift_days(now, -PRECISION_PERIOD_DAYS)
+        if last_report_at >= cutoff:
+            return None
+
+    since = store.shift_days(now, -PRECISION_PERIOD_DAYS * 2)
+    stats = store.alert_stats(conn, since=since)
+    total = stats["total"]
+    if total == 0:
+        return None
+
+    reviewed = stats["bought"] + stats["mismatch"]
+    if reviewed == 0:
+        return (
+            "📋 <b>Точность алертов</b>\n"
+            "За последние недели не было ни одного отзыва — ответь /bought или /mismatch "
+            "на алерт, по этим отметкам калибруются пороги."
+        )
+
+    percent = round(stats["bought"] / reviewed * 100)
+    return (
+        "📋 <b>Точность алертов</b>\n"
+        f"Precision алертов: {stats['bought']}/{reviewed} ({percent}%), "
+        f"всего алертов {total}"
+    )
+
+
+def build_digest_text(conn: sqlite3.Connection, cfg, now: str) -> str:
+    blocks: list[str] = []
+
+    switch = dead_man_switch(conn, now)
+    if switch:
+        blocks.append(switch)
+
+    summaries = build_all_summaries(conn, cfg, now=now)
+    blocks.append(render_digest(summaries, cfg, now=now))
+
+    findings = arbitrage.find(conn, cfg, now=now)
+    if findings:
+        arb_lines = ["🔄 <b>Кросс-рыночный арбитраж</b>"]
+        arb_lines.extend(arbitrage.render_line(f) for f in findings[:5])
+        blocks.append("\n".join(arb_lines))
+
+    trends = render_trends(conn, cfg, now=now)
+    if trends:
+        blocks.append("\n".join(["📈 <b>Тренды</b>", *trends]))
+
+    last_report_at = store.get_meta(conn, "precision_reported_at")
+    precision = precision_block(conn, now=now, last_report_at=last_report_at)
+    if precision:
+        blocks.append(precision)
+        store.set_meta(conn, "precision_reported_at", now)
+
+    weekly = weekly_manual_block(cfg, now)
+    if weekly:
+        blocks.append(weekly)
+
+    return "\n\n".join(blocks)
