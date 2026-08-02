@@ -142,6 +142,53 @@ def run_backfill(
     return {"skipped": False, "inserted": inserted, "errors": errors}
 
 
+def _refresh_best_prices(conn, cfg, session, token, rates, now: str) -> int:
+    """Перепроверяет лучшую цену каждого маршрута точечным запросом.
+
+    Дайджест уходит раз в сутки, поэтому несколько лишних запросов ничего не
+    стоят, а цифра в утреннем сообщении обязана быть настоящей: точечный
+    запрос по дате лучшей свежей записи одновременно освежает её last_seen_at
+    (если оффер жив) и добавляет новые ценовые точки в базу.
+
+    Возвращает число вставленных записей. Ошибки не фатальны: сводка должна
+    уйти даже если освежение не удалось.
+    """
+    inserted = 0
+    for origin, destination in cfg.routes():
+        fresh = [
+            row
+            for row in store.fresh_prices(
+                conn, origin, destination, now=now, ttl_hours=cfg.cache_ttl_hours
+            )
+            if row["landed_usd"] is not None
+        ]
+        if not fresh:
+            continue
+
+        best = min(fresh, key=lambda row: row["landed_usd"])
+        try:
+            records = aviasales.fetch_prices_for_dates(
+                session,
+                token,
+                origin=origin,
+                destination=destination,
+                market=best["market"],
+                currency=best["currency"],
+                departure_at=best["depart_date"],
+                return_at=best["return_date"],
+                one_way=cfg.one_way,
+                limit=30,
+            )
+        except aviasales.AviasalesError as exc:
+            LOG.warning("освежение лучшей цены %s->%s не удалось: %s", origin, destination, exc)
+            continue
+
+        enriched = fx.enrich(records, rates, cfg)
+        inserted += store.insert_prices(conn, enriched, now=now)
+
+    return inserted
+
+
 def run_digest(
     cfg: Config, db_path: Path = DEFAULT_DB, now: Optional[str] = None, session=None
 ) -> dict:
@@ -152,12 +199,21 @@ def run_digest(
     conn = _open(db_path)
     cfg = _effective_config(conn, cfg)
 
+    refreshed = 0
+    try:
+        token = require_env("TP_TOKEN")
+        rates = fx.fetch_usd_rates(session)
+    except (ConfigurationError, fx.FxError) as exc:
+        LOG.warning("освежение лучших цен перед сводкой пропущено: %s", exc)
+    else:
+        refreshed = _refresh_best_prices(conn, cfg, session, token, rates, now)
+
     routes = len(cfg.routes())
     text = digest.build_digest_text(conn, cfg, now=now)
     conn.close()
 
     notify.send_message(session, bot_token, chat_id, text)
-    return {"sent": True, "routes": routes}
+    return {"sent": True, "routes": routes, "refreshed": refreshed}
 
 
 def run_commands(

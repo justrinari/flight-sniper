@@ -1,9 +1,12 @@
+import dataclasses
 import json
 
 import pytest
+import requests
 import responses
 
 from src import runner, store
+from src.models import PriceRecord
 
 PRICES_URL = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
 GROUPED_URL = "https://api.travelpayouts.com/aviasales/v3/grouped_prices"
@@ -11,6 +14,7 @@ FX_URL = "https://open.er-api.com/v6/latest/USD"
 TG_URL = "https://api.telegram.org/botTG/sendMessage"
 
 FX_PAYLOAD = {"result": "success", "rates": {"USD": 1.0, "KGS": 87.5, "RUB": 92.0}}
+FX_RATES = {"usd": 1.0, "kgs": 87.5, "rub": 92.0}
 
 CACHE_PAYLOAD = {
     "success": True,
@@ -148,3 +152,158 @@ def test_require_env_raises_with_helpful_message(monkeypatch):
     monkeypatch.delenv("TP_TOKEN", raising=False)
     with pytest.raises(runner.ConfigurationError, match="TP_TOKEN"):
         runner.require_env("TP_TOKEN")
+
+
+# ---------------------------------------------------------------------------
+# _refresh_best_prices()
+# ---------------------------------------------------------------------------
+
+
+def _price_record(
+    landed,
+    depart="2026-10-12",
+    return_date="2026-10-24",
+    market="kg",
+    currency="kgs",
+    price_local=27000.0,
+    origin="FRU",
+    destination="HKT",
+):
+    return PriceRecord(
+        source="aviasales_cache",
+        origin=origin,
+        destination=destination,
+        market=market,
+        depart_date=depart,
+        return_date=return_date,
+        price_local=price_local,
+        currency=currency,
+        airline="KC",
+        transfers=1,
+        duration_min=1500,
+        duration_to_min=760,
+        search_url="https://www.aviasales.kg/search/x",
+        fx_rate=1 / 87.5,
+        landed_usd=landed,
+    )
+
+
+@pytest.fixture()
+def single_route_cfg(config_stub):
+    return dataclasses.replace(
+        config_stub,
+        origins=["FRU"],
+        destinations=["HKT"],
+        markets=["kg"],
+        market_currency={"kg": "kgs"},
+    )
+
+
+@responses.activate
+def test_refresh_best_prices_requests_specific_date_of_best_record(db, single_route_cfg):
+    conn = store.connect(db)
+    store.insert_prices(conn, [_price_record(landed=300.0, depart="2026-10-12")], now="2026-08-01T06:00:00Z")
+    responses.add(responses.GET, PRICES_URL, json=CACHE_PAYLOAD, status=200)
+
+    runner._refresh_best_prices(
+        conn, single_route_cfg, requests.Session(), "TP", FX_RATES, now="2026-08-01T06:30:00Z"
+    )
+
+    request_url = responses.calls[0].request.url
+    assert "departure_at=2026-10-12" in request_url
+    assert "departure_at=2026-10&" not in request_url
+    conn.close()
+
+
+@responses.activate
+def test_refresh_best_prices_inserts_returned_records(db, single_route_cfg):
+    conn = store.connect(db)
+    store.insert_prices(conn, [_price_record(landed=300.0, price_local=27000.0)], now="2026-08-01T06:00:00Z")
+    new_payload = json.loads(json.dumps(CACHE_PAYLOAD))
+    new_payload["data"][0]["price"] = 27500  # distinct price_local -> a genuinely new row
+    responses.add(responses.GET, PRICES_URL, json=new_payload, status=200)
+
+    inserted = runner._refresh_best_prices(
+        conn, single_route_cfg, requests.Session(), "TP", FX_RATES, now="2026-08-01T06:30:00Z"
+    )
+
+    assert inserted == 1
+    conn.close()
+
+
+@responses.activate
+def test_refresh_best_prices_skips_route_without_fresh_data(db, single_route_cfg):
+    conn = store.connect(db)
+    inserted = runner._refresh_best_prices(
+        conn, single_route_cfg, requests.Session(), "TP", FX_RATES, now="2026-08-01T06:30:00Z"
+    )
+    assert inserted == 0
+    assert len(responses.calls) == 0
+    conn.close()
+
+
+@responses.activate
+def test_refresh_best_prices_continues_after_aviasales_error(db, config_stub):
+    cfg = dataclasses.replace(
+        config_stub,
+        origins=["FRU", "ALA"],
+        destinations=["HKT"],
+        markets=["kg"],
+        market_currency={"kg": "kgs"},
+    )
+    conn = store.connect(db)
+    store.insert_prices(
+        conn, [_price_record(landed=300.0, origin="FRU", destination="HKT")], now="2026-08-01T06:00:00Z"
+    )
+    store.insert_prices(
+        conn, [_price_record(landed=310.0, origin="ALA", destination="HKT")], now="2026-08-01T06:00:00Z"
+    )
+    responses.add(responses.GET, PRICES_URL, json={"success": False, "error": "boom"}, status=200)
+    second_payload = json.loads(json.dumps(CACHE_PAYLOAD))
+    second_payload["data"][0]["origin"] = "ALA"
+    second_payload["data"][0]["price"] = 15500
+    responses.add(responses.GET, PRICES_URL, json=second_payload, status=200)
+
+    inserted = runner._refresh_best_prices(
+        conn, cfg, requests.Session(), "TP", FX_RATES, now="2026-08-01T06:30:00Z"
+    )
+
+    assert inserted == 1  # первый маршрут упал с ошибкой, второй всё равно обработан
+    assert len(responses.calls) == 2
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# run_digest() refreshes best prices first
+# ---------------------------------------------------------------------------
+
+
+@responses.activate
+def test_run_digest_returns_refreshed_count_and_still_sends_message(db, config_stub):
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=CACHE_PAYLOAD, status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+    runner.run_scan(config_stub, db_path=db, now="2026-08-01T06:00:00Z")
+
+    result = runner.run_digest(config_stub, db_path=db, now="2026-08-01T06:10:00Z")
+
+    assert "refreshed" in result
+    assert result["sent"] is True
+    sent = [c for c in responses.calls if c.request.url.startswith(TG_URL)]
+    assert len(sent) == 1
+
+
+@responses.activate
+def test_run_digest_without_tp_token_still_sends_digest(db, config_stub, monkeypatch):
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=CACHE_PAYLOAD, status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+    runner.run_scan(config_stub, db_path=db, now="2026-08-01T06:00:00Z")
+
+    monkeypatch.delenv("TP_TOKEN", raising=False)
+    result = runner.run_digest(config_stub, db_path=db, now="2026-08-01T06:10:00Z")
+
+    assert result["sent"] is True
+    assert result["refreshed"] == 0
+    sent = [c for c in responses.calls if c.request.url.startswith(TG_URL)]
+    assert len(sent) == 1
