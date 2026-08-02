@@ -13,7 +13,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Optional
 
-from src import airlines, digest, store
+from src import airlines, cities, digest, store
 
 
 @dataclass(frozen=True)
@@ -113,7 +113,7 @@ def find(conn: sqlite3.Connection, cfg, now: str) -> list[Finding]:
 
 
 def render_line(finding: Finding) -> str:
-    route = f"{html.escape(finding.origin)}→{html.escape(finding.destination)}"
+    route = html.escape(cities.route(finding.origin, finding.destination))
     day = digest.format_day(finding.depart_date)
     airline_name = html.escape(airlines.name(finding.airline))
     percent = round(finding.saving_ratio * 100)

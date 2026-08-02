@@ -124,7 +124,7 @@ def test_run_digest_sends_message(db, config_stub):
     sent = [c for c in responses.calls if c.request.url.startswith(TG_URL)]
     assert len(sent) == 1
     body = json.loads(sent[0].request.body)
-    assert "FRU→HKT" in body["text"]
+    assert "Бишкек → Пхукет" in body["text"]
     assert body["chat_id"] == "999"
 
 

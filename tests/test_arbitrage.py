@@ -168,7 +168,7 @@ def finding():
 
 def test_render_line_contains_both_markets_and_prices(finding):
     line = arbitrage.render_line(finding)
-    assert "ALA" in line and "HKT" in line
+    assert "Алматы" in line and "Пхукет" in line
     assert "06.10" in line
     assert "AirAsia X" in line  # D7
     assert "$268" in line and "(kg)" in line

@@ -79,7 +79,7 @@ def test_render_trends_reports_falling_streak(conn, config_stub):
     ):
         seed(conn, price, now=f"{day}T06:00:00Z")
     lines = digest.render_trends(conn, config_stub, now="2026-08-01T07:00:00Z")
-    assert any("ALA→HKT" in line and "3-й день подряд" in line for line in lines)
+    assert any("Алматы → Пхукет" in line and "3-й день подряд" in line for line in lines)
 
 
 def test_render_trends_empty_without_movement(conn, config_stub):

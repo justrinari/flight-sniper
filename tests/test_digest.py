@@ -136,7 +136,7 @@ def test_render_matches_expected_shape(config_stub):
     ]
     text = digest.render_digest(summaries, config_stub, now="2026-08-01T03:00:00Z")
     assert "октябрь 2026" in text
-    assert "FRU→HKT" in text
+    assert "Бишкек → Пхукет" in text
     assert "$312" in text
     assert "−4%" in text
     assert "🟡" in text

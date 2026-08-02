@@ -16,7 +16,7 @@ import html
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from src import airlines, digest, fx, rules
+from src import airlines, cities, digest, fx, rules
 from src.models import PriceRecord
 from src.sources.aviasales import AviasalesError, fetch_prices_for_dates
 
@@ -128,7 +128,7 @@ _GATE_WARNING = "продавец-посредник: поддержка при 
 
 def render_alert(result: ConfirmResult) -> str:
     c = result.candidate
-    route = f"{html.escape(c.origin)}→{html.escape(c.destination)}"
+    route = html.escape(cities.route(c.origin, c.destination))
     price = f"${c.landed_usd:.0f}"
 
     if result.level == LEVEL_BUY:

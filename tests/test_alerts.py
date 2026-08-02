@@ -184,7 +184,7 @@ def test_render_buy_alert_contains_expected_pieces(candidate):
         note="",
     )
     text = alerts.render_alert(result)
-    assert "ALA" in text and "HKT" in text
+    assert "Алматы" in text and "Пхукет" in text
     assert "$411" in text  # исходная цена кандидата
     assert "$417" in text  # подтверждённая цена
     assert "06.10" in text

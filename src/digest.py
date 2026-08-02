@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
-from src import airlines, arbitrage, rules, store
+from src import airlines, arbitrage, cities, rules, store
 
 MAX_SCAN_AGE_HOURS = 12
 PRECISION_PERIOD_DAYS = 14
@@ -162,7 +162,7 @@ def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
     lines = [header, ""]
 
     for summary in summaries:
-        route = f"{summary.origin}→{summary.destination}"
+        route = cities.route(summary.origin, summary.destination)
         if summary.best_landed is None:
             lines.append(f"{route}  нет данных ⚪")
             continue
@@ -217,7 +217,7 @@ def render_trends(conn: sqlite3.Connection, cfg, now: str) -> list[str]:
     window_start = store.shift_days(now, -cfg.baseline_window_days)
     lines: list[str] = []
     for origin, destination in cfg.routes():
-        route = f"{origin}→{destination}"
+        route = cities.route(origin, destination)
         daily = rules.daily_minimums(conn, origin, destination, since=window_start)
         streak = rules.falling_streak(daily)
         if streak >= 2:
