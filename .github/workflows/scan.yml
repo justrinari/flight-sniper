@@ -2,7 +2,7 @@ name: scan
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       backfill:
@@ -20,6 +20,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,18 +28,58 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Restore database
-        run: bash scripts/db_pull.sh
       - name: Backfill
         if: inputs.backfill
         run: python monitor.py backfill
         env:
           TP_TOKEN: ${{ secrets.TP_TOKEN }}
-      - name: Scan
-        run: python monitor.py scan
+      - name: Scan + commands loop
+        run: |
+          # GitHub Actions по умолчанию запускает bash-шаги с `set -e`, но нам
+          # нужен явный контроль: ошибка скана/команд — не повод ронять весь
+          # ран (могла моргнуть сеть, API мог ответить 500), а вот ошибка
+          # db_pull/db_push — это про целостность базы, тут ран должен упасть
+          # заметно. Поэтому отключаем автоматический -e и решаем сами.
+          set +e
+
+          for i in 1 2 3 4; do
+            ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "=== итерация $i/4 ($ts) ==="
+
+            bash scripts/db_pull.sh
+            if [ $? -ne 0 ]; then
+              echo "::error::db_pull упал на итерации $i — прерываю ран, целостность базы под вопросом"
+              exit 1
+            fi
+
+            echo "скан: итерация $i старт"
+            python monitor.py scan
+            if [ $? -ne 0 ]; then
+              echo "::warning::скан: итерация $i упала, продолжаю цикл"
+            else
+              echo "скан: итерация $i завершена успешно"
+            fi
+
+            echo "команды: итерация $i старт"
+            python monitor.py commands
+            if [ $? -ne 0 ]; then
+              echo "::warning::команды: итерация $i упали, продолжаю цикл"
+            else
+              echo "команды: итерация $i завершены успешно"
+            fi
+
+            bash scripts/db_push.sh "scan+commands $i $ts"
+            if [ $? -ne 0 ]; then
+              echo "::error::db_push упал на итерации $i — прерываю ран, целостность базы под вопросом"
+              exit 1
+            fi
+
+            if [ "$i" -lt 4 ]; then
+              echo "пауза 14 минут до итерации $((i + 1))"
+              sleep 840
+            fi
+          done
         env:
           TP_TOKEN: ${{ secrets.TP_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      - name: Persist database
-        run: bash scripts/db_push.sh "scan $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -1,8 +1,6 @@
 name: commands
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
