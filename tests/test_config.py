@@ -49,6 +49,77 @@ def test_load_reads_all_fields(config_path):
     assert cfg.abs_threshold_usd == 250
 
 
+def test_load_old_departure_month_key_wraps_into_list(config_path):
+    """config_path использует старый ключ departure_month (строка) —
+    старый конфиг не должен ломаться."""
+    cfg = Config.load(config_path)
+    assert cfg.departure_months == ["2026-10"]
+    assert cfg.departure_month == "2026-10"
+
+
+def test_load_new_departure_months_key(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """
+            origins: [FRU, ALA]
+            destinations: [HKT, DPS]
+            markets: [kg, ru]
+            market_currency:
+              kg: kgs
+              ru: rub
+            cross_market_delta: 0.05
+            fx_markup:
+              default: 0.025
+              usd: 0.0
+            departure_months: ["2026-10", "2026-11"]
+            return_months: ["2026-10", "2026-11"]
+            trip_type: round_trip
+            nights_range: [10, 16]
+            report_currency: usd
+            max_transfer_hours: 12
+            abs_threshold_usd: 250
+            anomaly_percentile: 10
+            yellow_delta: 0.15
+            baseline_window_days: 30
+            cache_ttl_hours: 48
+            digest_time: "09:00"
+            timezone: "Asia/Bishkek"
+            """
+        ),
+        encoding="utf-8",
+    )
+    cfg = Config.load(path)
+    assert cfg.departure_months == ["2026-10", "2026-11"]
+    assert cfg.departure_month == "2026-10"  # первый месяц — для fallback-мест
+
+
+def test_load_without_any_departure_key_raises(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """
+            origins: [FRU]
+            destinations: [HKT]
+            markets: [kg]
+            market_currency:
+              kg: kgs
+            fx_markup:
+              default: 0.025
+            return_months: ["2026-10"]
+            nights_range: [10, 16]
+            max_transfer_hours: 12
+            abs_threshold_usd: 250
+            anomaly_percentile: 10
+            yellow_delta: 0.15
+            """
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="departure_months"):
+        Config.load(path)
+
+
 def test_routes_is_cartesian_product(config_path):
     cfg = Config.load(config_path)
     assert cfg.routes() == [

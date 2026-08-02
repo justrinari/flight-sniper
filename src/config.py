@@ -21,7 +21,6 @@ REQUIRED_KEYS = (
     "markets",
     "market_currency",
     "fx_markup",
-    "departure_month",
     "return_months",
     "nights_range",
     "max_transfer_hours",
@@ -48,7 +47,7 @@ class Config:
     market_currency: dict[str, str]
     cross_market_delta: float
     fx_markup: dict[str, float]
-    departure_month: str
+    departure_months: list[str]
     return_months: list[str]
     trip_type: str
     nights_range: tuple[int, int]
@@ -67,9 +66,18 @@ class Config:
     def load(cls, path: str | Path) -> "Config":
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         missing = [key for key in REQUIRED_KEYS if key not in raw]
+        if "departure_months" not in raw and "departure_month" not in raw:
+            missing.append("departure_months")
         if missing:
             raise ValueError(f"config.yaml: отсутствуют обязательные ключи: {', '.join(missing)}")
         nights = raw["nights_range"]
+        # Обратная совместимость: старый конфиг мог задавать один месяц строкой
+        # через departure_month — оборачиваем его в список и работаем дальше.
+        raw_months = raw.get("departure_months", raw.get("departure_month"))
+        if isinstance(raw_months, str):
+            departure_months = [raw_months]
+        else:
+            departure_months = [str(m) for m in raw_months]
         return cls(
             origins=list(raw["origins"]),
             destinations=list(raw["destinations"]),
@@ -77,7 +85,7 @@ class Config:
             market_currency=dict(raw["market_currency"]),
             cross_market_delta=float(raw.get("cross_market_delta", 0.05)),
             fx_markup={str(k): float(v) for k, v in raw["fx_markup"].items()},
-            departure_month=str(raw["departure_month"]),
+            departure_months=departure_months,
             return_months=[str(m) for m in raw["return_months"]],
             trip_type=str(raw.get("trip_type", "round_trip")),
             nights_range=(int(nights[0]), int(nights[1])),
@@ -123,3 +131,8 @@ class Config:
     @property
     def one_way(self) -> bool:
         return self.trip_type != "round_trip"
+
+    @property
+    def departure_month(self) -> str:
+        """Первый месяц — для мест, где нужен один (например, fallback-даты)."""
+        return self.departure_months[0]

@@ -191,3 +191,43 @@ def test_render_shows_direct_flight_wording(config_stub):
 def test_build_all_summaries_covers_every_route(conn, config_stub):
     summaries = digest.build_all_summaries(conn, config_stub, now="2026-08-01T07:00:00Z")
     assert [(s.origin, s.destination) for s in summaries] == config_stub.routes()
+
+
+# ---------------------------------------------------------------------------
+# format_month_range() / заголовок дайджеста
+# ---------------------------------------------------------------------------
+
+
+def test_format_month_range_single_month():
+    assert digest.format_month_range(["2026-10"]) == "октябрь 2026"
+
+
+def test_format_month_range_two_consecutive_months_same_year():
+    assert digest.format_month_range(["2026-10", "2026-11"]) == "октябрь–ноябрь 2026"
+
+
+def test_format_month_range_uses_en_dash():
+    assert "–" in digest.format_month_range(["2026-10", "2026-11"])
+
+
+def test_format_month_range_different_years():
+    assert (
+        digest.format_month_range(["2026-12", "2027-01"])
+        == "декабрь 2026 – январь 2027"
+    )
+
+
+def test_render_digest_header_two_months(config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(config_stub, departure_months=["2026-10", "2026-11"])
+    text = digest.render_digest([], cfg, now="2026-08-01T03:00:00Z")
+    assert "октябрь–ноябрь 2026" in text
+
+
+def test_render_digest_header_different_years(config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(config_stub, departure_months=["2026-12", "2027-01"])
+    text = digest.render_digest([], cfg, now="2026-08-01T03:00:00Z")
+    assert "декабрь 2026 – январь 2027" in text

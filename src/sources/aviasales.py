@@ -129,8 +129,8 @@ def filter_by_nights(
     return kept
 
 
-def filter_by_month(records: Sequence[PriceRecord], month: str) -> list[PriceRecord]:
-    return [r for r in records if r.depart_date.startswith(month)]
+def filter_by_months(records: Sequence[PriceRecord], months: Sequence[str]) -> list[PriceRecord]:
+    return [r for r in records if any(r.depart_date.startswith(month) for month in months)]
 
 
 def filter_by_transfer_time(
@@ -163,7 +163,7 @@ def filter_by_transfer_time(
 
 
 def filter_records(records: Sequence[PriceRecord], cfg) -> list[PriceRecord]:
-    filtered = filter_by_month(records, cfg.departure_month)
+    filtered = filter_by_months(records, cfg.departure_months)
     if not cfg.one_way:
         filtered = [r for r in filtered if r.return_date is not None]
     filtered = filter_by_nights(filtered, cfg.nights_range)
@@ -230,7 +230,7 @@ def fetch_prices_for_dates(
 
 
 def scan_all(session: requests.Session, token: str, cfg) -> tuple[list[PriceRecord], list[str]]:
-    """Полный обход маршрутов × рынков × месяцев возврата.
+    """Полный обход маршрутов × рынков × месяцев вылета × месяцев возврата.
 
     Возвращает (записи, тексты ошибок). Падение одного запроса не отменяет скан.
     """
@@ -241,36 +241,40 @@ def scan_all(session: requests.Session, token: str, cfg) -> tuple[list[PriceReco
     for origin, destination in cfg.routes():
         for market in cfg.markets:
             currency = cfg.currency_for(market)
-            for return_at in return_months:
-                try:
-                    records = fetch_prices_for_dates(
-                        session,
-                        token,
-                        origin,
-                        destination,
-                        market,
-                        currency,
-                        cfg.departure_month,
-                        return_at,
-                        one_way=cfg.one_way,
-                    )
-                except AviasalesError as exc:
-                    message = f"{origin}->{destination} [{market}] {return_at}: {exc}"
-                    LOG.warning("скан не удался: %s", message)
-                    errors.append(message)
-                    continue
-                for record in filter_records(records, cfg):
-                    key = (
-                        record.market,
-                        record.origin,
-                        record.destination,
-                        record.depart_date,
-                        record.return_date,
-                        record.airline,
-                        record.transfers,
-                        record.price_local,
-                    )
-                    collected.setdefault(key, record)
+            for departure_month in cfg.departure_months:
+                for return_at in return_months:
+                    try:
+                        records = fetch_prices_for_dates(
+                            session,
+                            token,
+                            origin,
+                            destination,
+                            market,
+                            currency,
+                            departure_month,
+                            return_at,
+                            one_way=cfg.one_way,
+                        )
+                    except AviasalesError as exc:
+                        message = (
+                            f"{origin}->{destination} [{market}] {departure_month} "
+                            f"{return_at}: {exc}"
+                        )
+                        LOG.warning("скан не удался: %s", message)
+                        errors.append(message)
+                        continue
+                    for record in filter_records(records, cfg):
+                        key = (
+                            record.market,
+                            record.origin,
+                            record.destination,
+                            record.depart_date,
+                            record.return_date,
+                            record.airline,
+                            record.transfers,
+                            record.price_local,
+                        )
+                        collected.setdefault(key, record)
     return list(collected.values()), errors
 
 
@@ -312,23 +316,24 @@ def backfill(session: requests.Session, token: str, cfg) -> tuple[list[PriceReco
     for origin, destination in cfg.routes():
         for market in cfg.markets:
             currency = cfg.currency_for(market)
-            try:
-                records = fetch_grouped_prices(
-                    session,
-                    token,
-                    origin,
-                    destination,
-                    market,
-                    currency,
-                    cfg.departure_month,
-                    one_way=cfg.one_way,
-                )
-            except AviasalesError as exc:
-                message = f"backfill {origin}->{destination} [{market}]: {exc}"
-                LOG.warning("%s", message)
-                errors.append(message)
-                continue
-            # Бэкфилл — историческая база, коридор ночей здесь не применяем:
-            # grouped_prices отдаёт по одному самому дешёвому варианту на дату.
-            collected.extend(filter_by_month(records, cfg.departure_month))
+            for departure_month in cfg.departure_months:
+                try:
+                    records = fetch_grouped_prices(
+                        session,
+                        token,
+                        origin,
+                        destination,
+                        market,
+                        currency,
+                        departure_month,
+                        one_way=cfg.one_way,
+                    )
+                except AviasalesError as exc:
+                    message = f"backfill {origin}->{destination} [{market}] {departure_month}: {exc}"
+                    LOG.warning("%s", message)
+                    errors.append(message)
+                    continue
+                # Бэкфилл — историческая база, коридор ночей здесь не применяем:
+                # grouped_prices отдаёт по одному самому дешёвому варианту на дату.
+                collected.extend(filter_by_months(records, cfg.departure_months))
     return collected, errors

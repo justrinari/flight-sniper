@@ -12,7 +12,7 @@ def config_stub() -> Config:
         market_currency={"kg": "kgs", "ru": "rub"},
         cross_market_delta=0.05,
         fx_markup={"default": 0.025, "usd": 0.0},
-        departure_month="2026-10",
+        departure_months=["2026-10"],
         return_months=["2026-10", "2026-11"],
         trip_type="round_trip",
         nights_range=(10, 16),

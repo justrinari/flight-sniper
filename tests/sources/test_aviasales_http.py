@@ -125,6 +125,36 @@ def test_scan_all_survives_single_route_failure(session, config_stub):
 
 
 @responses.activate
+def test_scan_all_covers_multiple_departure_months(session, config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(
+        config_stub, trip_type="one_way", departure_months=["2026-10", "2026-11"]
+    )
+    responses.add(responses.GET, URL, json=PAYLOAD, status=200)
+    records, errors = aviasales.scan_all(session, "TOKEN", cfg)
+    # 4 маршрута × 2 рынка × 2 месяца вылета (one_way — без оси месяцев возврата)
+    assert len(responses.calls) == 16
+    assert errors == []
+    departure_ats = {call.request.url for call in responses.calls}
+    assert any("departure_at=2026-10" in url for url in departure_ats)
+    assert any("departure_at=2026-11" in url for url in departure_ats)
+
+
+@responses.activate
+def test_scan_all_includes_month_in_error_message(session, config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(
+        config_stub, trip_type="one_way", departure_months=["2026-10", "2026-11"]
+    )
+    responses.add(responses.GET, URL, json={"success": False, "error": "boom"}, status=200)
+    _, errors = aviasales.scan_all(session, "TOKEN", cfg)
+    assert any("2026-10" in e for e in errors)
+    assert any("2026-11" in e for e in errors)
+
+
+@responses.activate
 def test_scan_all_deduplicates_identical_offers_within_run(session, config_stub):
     responses.add(responses.GET, URL, json=PAYLOAD, status=200)
     records, _ = aviasales.scan_all(session, "TOKEN", config_stub)

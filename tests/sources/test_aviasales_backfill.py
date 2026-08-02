@@ -110,3 +110,29 @@ def test_backfill_survives_errors(session, config_stub):
     records, errors = aviasales.backfill(session, "TOKEN", config_stub)
     assert records == []
     assert len(errors) == 8
+
+
+@responses.activate
+def test_backfill_covers_multiple_departure_months(session, config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(config_stub, departure_months=["2026-10", "2026-11"])
+    responses.add(responses.GET, URL, json=GROUPED, status=200)
+    records, errors = aviasales.backfill(session, "TOKEN", cfg)
+    # 4 маршрута × 2 рынка × 2 месяца вылета
+    assert len(responses.calls) == 16
+    assert errors == []
+    departure_ats = {call.request.url for call in responses.calls}
+    assert any("departure_at=2026-10" in url for url in departure_ats)
+    assert any("departure_at=2026-11" in url for url in departure_ats)
+
+
+@responses.activate
+def test_backfill_error_message_includes_month(session, config_stub):
+    import dataclasses
+
+    cfg = dataclasses.replace(config_stub, departure_months=["2026-10", "2026-11"])
+    responses.add(responses.GET, URL, json={"success": False, "error": "nope"}, status=200)
+    _, errors = aviasales.backfill(session, "TOKEN", cfg)
+    assert any("2026-10" in e for e in errors)
+    assert any("2026-11" in e for e in errors)

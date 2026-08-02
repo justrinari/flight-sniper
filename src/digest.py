@@ -142,10 +142,23 @@ def _local_date(now: str, tz: str) -> datetime:
     return moment.astimezone(ZoneInfo(tz))
 
 
+def format_month_range(months: Sequence[str]) -> str:
+    """Один месяц → 'октябрь 2026'; несколько подряд → 'октябрь–ноябрь 2026';
+    разные годы → 'декабрь 2026 – январь 2027' (тире — типографское, U+2013)."""
+    parsed = [(int(y), int(m)) for y, m in (month.split("-") for month in months)]
+    first_year, first_month = parsed[0]
+    last_year, last_month = parsed[-1]
+    dash = "–"
+    if len(parsed) == 1:
+        return f"{MONTHS_RU[first_month]} {first_year}"
+    if first_year == last_year:
+        return f"{MONTHS_RU[first_month]}{dash}{MONTHS_RU[last_month]} {first_year}"
+    return f"{MONTHS_RU[first_month]} {first_year} {dash} {MONTHS_RU[last_month]} {last_year}"
+
+
 def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
     local = _local_date(now, cfg.timezone)
-    year, month = cfg.departure_month.split("-")
-    header = f"✈️ <b>{local.strftime('%d.%m')}</b> · {MONTHS_RU[int(month)]} {year}"
+    header = f"✈️ <b>{local.strftime('%d.%m')}</b> · {format_month_range(cfg.departure_months)}"
     lines = [header, ""]
 
     for summary in summaries:

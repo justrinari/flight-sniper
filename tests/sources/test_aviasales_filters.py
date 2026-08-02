@@ -43,8 +43,14 @@ def test_one_way_records_survive_nights_filter():
 
 def test_departure_month_filter_keeps_only_target_month():
     records = [make(depart="2026-10-12"), make(depart="2026-09-30"), make(depart="2026-11-01")]
-    kept = aviasales.filter_by_month(records, "2026-10")
+    kept = aviasales.filter_by_months(records, ["2026-10"])
     assert [r.depart_date for r in kept] == ["2026-10-12"]
+
+
+def test_departure_months_filter_keeps_several_months():
+    records = [make(depart="2026-10-12"), make(depart="2026-11-01"), make(depart="2026-09-30")]
+    kept = aviasales.filter_by_months(records, ["2026-10", "2026-11"])
+    assert [r.depart_date for r in kept] == ["2026-10-12", "2026-11-01"]
 
 
 def test_transfer_filter_drops_legs_longer_than_shortest_plus_budget():
