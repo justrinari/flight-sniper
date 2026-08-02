@@ -95,3 +95,38 @@ def test_missing_required_key_raises(tmp_path):
     path.write_text("origins: [FRU]\n", encoding="utf-8")
     with pytest.raises(ValueError, match="destinations"):
         Config.load(path)
+
+
+def test_extra_routes_defaults_to_empty(config_path):
+    cfg = Config.load(config_path)
+    assert cfg.extra_routes == ()
+
+
+def test_routes_includes_extra_routes(config_path):
+    cfg = Config.load(config_path)
+    updated = cfg.with_overrides({"extra_routes": '[["TAS", "HKT"]]'})
+    assert updated.routes() == [
+        ("FRU", "HKT"),
+        ("FRU", "DPS"),
+        ("ALA", "HKT"),
+        ("ALA", "DPS"),
+        ("TAS", "HKT"),
+    ]
+
+
+def test_routes_deduplicates_extra_routes_already_in_base(config_path):
+    cfg = Config.load(config_path)
+    updated = cfg.with_overrides({"extra_routes": '[["FRU", "HKT"], ["TAS", "HKT"]]'})
+    assert updated.routes() == [
+        ("FRU", "HKT"),
+        ("FRU", "DPS"),
+        ("ALA", "HKT"),
+        ("ALA", "DPS"),
+        ("TAS", "HKT"),
+    ]
+
+
+def test_with_overrides_extra_routes_is_tuple_of_tuples(config_path):
+    cfg = Config.load(config_path)
+    updated = cfg.with_overrides({"extra_routes": '[["TAS", "HKT"]]'})
+    assert updated.extra_routes == (("TAS", "HKT"),)

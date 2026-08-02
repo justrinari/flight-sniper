@@ -8,6 +8,7 @@ config.yaml содержит дефолты и не перезаписывает
 from __future__ import annotations
 
 import dataclasses
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ OVERRIDABLE: dict[str, Any] = {
     "yellow_delta": float,
     "anomaly_percentile": float,
     "cross_market_delta": float,
+    "extra_routes": lambda value: [tuple(pair) for pair in json.loads(value)],
 }
 
 
@@ -59,6 +61,7 @@ class Config:
     cache_ttl_hours: int
     digest_time: str
     timezone: str
+    extra_routes: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -90,7 +93,12 @@ class Config:
         )
 
     def routes(self) -> list[tuple[str, str]]:
-        return [(o, d) for o in self.origins for d in self.destinations]
+        base = [(o, d) for o in self.origins for d in self.destinations]
+        for pair in self.extra_routes:
+            route = tuple(pair)
+            if route not in base:
+                base.append(route)
+        return base
 
     def currency_for(self, market: str) -> str:
         try:
@@ -106,6 +114,8 @@ class Config:
         for key, caster in OVERRIDABLE.items():
             if key in overrides:
                 changes[key] = caster(overrides[key])
+        if "extra_routes" in changes:
+            changes["extra_routes"] = tuple(tuple(pair) for pair in changes["extra_routes"])
         if not changes:
             return self
         return dataclasses.replace(self, **changes)
