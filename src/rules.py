@@ -16,10 +16,15 @@ from __future__ import annotations
 import math
 import sqlite3
 from dataclasses import dataclass
+from datetime import date
 from statistics import median as _median
 from typing import Optional, Sequence
 
+from src import store
+
 MIN_SAMPLE = 5
+
+_DAILY_MIN_COLUMNS = ("landed_usd", "price_local")
 
 GREEN = "green"
 YELLOW = "yellow"
@@ -94,17 +99,141 @@ def level_emoji(level: str) -> str:
 
 
 def daily_minimums(
-    conn: sqlite3.Connection, origin: str, destination: str, since: str
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    since: str,
+    market: Optional[str] = None,
+    column: str = "landed_usd",
 ) -> list[tuple[str, float]]:
-    """Минимальная landed-цена по каждому дню наблюдения, по возрастанию даты.
+    """Минимальная цена по каждому дню наблюдения, по возрастанию даты.
 
     Это и есть выборка для baseline: одна точка на день, а не все офферы подряд.
+    `column` — "landed_usd" (сравнение рынков) или "price_local" (сравнение
+    внутри одного рынка, без шума курса валюты); значение не параметризуется
+    через `?`, поэтому допустимы только эти два литерала.
     """
-    rows = conn.execute(
-        "SELECT substr(last_seen_at, 1, 10) AS day, MIN(landed_usd) AS best"
+    if column not in _DAILY_MIN_COLUMNS:
+        raise ValueError(f"daily_minimums: недопустимая колонка {column!r}")
+
+    sql = (
+        f"SELECT substr(last_seen_at, 1, 10) AS day, MIN({column}) AS best"
         " FROM price_history"
-        " WHERE origin = ? AND destination = ? AND last_seen_at >= ? AND landed_usd IS NOT NULL"
-        " GROUP BY day ORDER BY day",
-        (origin, destination, since),
-    ).fetchall()
+        " WHERE origin = ? AND destination = ? AND last_seen_at >= ?"
+        f" AND {column} IS NOT NULL"
+    )
+    params: list[object] = [origin, destination, since]
+    if market is not None:
+        sql += " AND market = ?"
+        params.append(market)
+    sql += " GROUP BY day ORDER BY day"
+
+    rows = conn.execute(sql, params).fetchall()
     return [(row["day"], float(row["best"])) for row in rows]
+
+
+_NIGHT_WORDS = ("ночь", "ночи", "ночей")
+
+
+def _nights_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return _NIGHT_WORDS[0]
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return _NIGHT_WORDS[1]
+    return _NIGHT_WORDS[2]
+
+
+@dataclass(frozen=True)
+class Candidate:
+    origin: str
+    destination: str
+    market: str
+    depart_date: str
+    return_date: Optional[str]
+    price_local: float
+    currency: str
+    landed_usd: float
+    airline: Optional[str]
+    transfers: Optional[int]
+    gate: Optional[str]
+    search_url: Optional[str]
+    baseline: Baseline  # в локальной валюте своего рынка, по дневным минимумам
+
+    @property
+    def route_date_key(self) -> str:
+        return f"{self.origin}-{self.destination}-{self.depart_date}-{self.return_date or ''}"
+
+    @property
+    def nights_text(self) -> str:
+        """'12 ночей' / '1 ночь' / 'в один конец' — для текста алерта."""
+        if not self.return_date:
+            return "в один конец"
+        nights = (
+            date.fromisoformat(self.return_date) - date.fromisoformat(self.depart_date)
+        ).days
+        return f"{nights} {_nights_word(nights)}"
+
+
+def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
+    """Кандидаты-аномалии: сегодняшний минимум дешевле p10 истории дневных минимумов.
+
+    Один кандидат на пару маршрут × рынок (самый дешёвый из свежих офферов),
+    не по одному на каждую дату вылета. Сравнение — в локальной валюте рынка,
+    чтобы движение курса не выглядело падением цены.
+    """
+    window_start = store.shift_days(now, -cfg.baseline_window_days)
+    candidates: list[Candidate] = []
+
+    for origin, destination in cfg.routes():
+        for market in cfg.markets:
+            daily = daily_minimums(
+                conn,
+                origin,
+                destination,
+                since=window_start,
+                market=market,
+                column="price_local",
+            )
+            baseline = compute_baseline(
+                [price for _, price in daily], cfg.anomaly_percentile
+            )
+            if baseline is None:
+                continue
+
+            fresh = [
+                row
+                for row in store.fresh_prices(
+                    conn,
+                    origin,
+                    destination,
+                    now=now,
+                    ttl_hours=cfg.cache_ttl_hours,
+                    market=market,
+                )
+                if row["landed_usd"] is not None
+            ]
+            if not fresh:
+                continue
+
+            best = min(fresh, key=lambda row: row["price_local"])
+            if best["price_local"] < baseline.anomaly_threshold:
+                candidates.append(
+                    Candidate(
+                        origin=origin,
+                        destination=destination,
+                        market=market,
+                        depart_date=best["depart_date"],
+                        return_date=best["return_date"],
+                        price_local=float(best["price_local"]),
+                        currency=best["currency"],
+                        landed_usd=float(best["landed_usd"]),
+                        airline=best["airline"],
+                        transfers=best["transfers"],
+                        gate=best["gate"],
+                        search_url=best["search_url"],
+                        baseline=baseline,
+                    )
+                )
+
+    candidates.sort(key=lambda c: c.landed_usd)
+    return candidates
