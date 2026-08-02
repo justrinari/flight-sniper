@@ -1,4 +1,6 @@
-origins: [FRU, ALA]
+# BSZ — код Бишкека в справочнике Travelpayouts. FRU их API не принимает:
+# "unknown location code `FRU`". Проверено живым запросом 02.08.2026.
+origins: [BSZ, ALA]
 destinations: [HKT, DPS]
 markets: [kg, ru]
 market_currency:
