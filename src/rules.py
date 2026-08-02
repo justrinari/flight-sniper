@@ -132,6 +132,88 @@ def daily_minimums(
     return [(row["day"], float(row["best"])) for row in rows]
 
 
+def falling_streak(daily: Sequence[tuple[str, float]]) -> int:
+    """Сколько дней подряд минимум снижается, считая от последнего дня.
+
+    Дни должны быть упорядочены по возрастанию даты (как возвращает
+    daily_minimums). Меньше двух точек или рост в последний день — 0.
+    """
+    if len(daily) < 2:
+        return 0
+    streak = 0
+    for i in range(len(daily) - 1, 0, -1):
+        if daily[i][1] < daily[i - 1][1]:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def week_delta(
+    conn: sqlite3.Connection, origin: str, destination: str, now: str
+) -> Optional[float]:
+    """Относительная разница минимума последних 7 дней к предыдущим 7.
+
+    None, если одного из периодов нет в данных.
+    """
+    since_recent = store.shift_days(now, -7)
+    since_prev = store.shift_days(now, -14)
+    daily = daily_minimums(conn, origin, destination, since=since_prev)
+
+    recent_cutoff = since_recent[:10]
+    recent = [price for day, price in daily if day >= recent_cutoff]
+    previous = [price for day, price in daily if day < recent_cutoff]
+    if not recent or not previous:
+        return None
+
+    prev_min = min(previous)
+    if prev_min == 0:
+        return None
+    return min(recent) / prev_min - 1.0
+
+
+def dow_factor(
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    depart_date: str,
+    now: str,
+    min_sample: int = MIN_SAMPLE,
+) -> float:
+    """Множитель к baseline: насколько этот день недели дешевле среднего.
+
+    Смотрит на день недели ДАТЫ ВЫЛЕТА (не дня наблюдения), в окне 60 дней
+    наблюдений. 1.0, пока наблюдений по этому дню недели меньше min_sample —
+    поправка не должна срабатывать на шуме.
+    """
+    window_start = store.shift_days(now, -60)
+    rows = conn.execute(
+        "SELECT depart_date, landed_usd FROM price_history"
+        " WHERE origin = ? AND destination = ? AND last_seen_at >= ?"
+        " AND landed_usd IS NOT NULL",
+        (origin, destination, window_start),
+    ).fetchall()
+    if not rows:
+        return 1.0
+
+    target_weekday = date.fromisoformat(depart_date).weekday()
+    target_values: list[float] = []
+    all_values: list[float] = []
+    for row in rows:
+        value = float(row["landed_usd"])
+        all_values.append(value)
+        if date.fromisoformat(row["depart_date"]).weekday() == target_weekday:
+            target_values.append(value)
+
+    if len(target_values) < min_sample:
+        return 1.0
+
+    overall_median = _median(all_values)
+    if overall_median == 0:
+        return 1.0
+    return _median(target_values) / overall_median
+
+
 _NIGHT_WORDS = ("ночь", "ночи", "ночей")
 
 
