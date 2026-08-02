@@ -5,6 +5,7 @@
   scan      — обход кэша Aviasales, запись истории
   backfill  — стартовая месячная матрица (пропускается, если база не пуста)
   digest    — ежедневный дайджест в Telegram
+  commands  — обработать команды Telegram (getUpdates), отправить ответы
 """
 
 from __future__ import annotations
@@ -21,22 +22,40 @@ DEFAULT_CONFIG = Path("config.yaml")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="monitor.py", description="flight-sniper")
+    # --verbose работает и до, и после подкоманды (monitor.py --verbose scan
+    # и monitor.py scan --verbose): common добавляется и родительскому
+    # парсеру, и каждому субпарсеру через parents=[...]. default=SUPPRESS
+    # везде и НЕ трогается через set_defaults(): parents расшаривает один и
+    # тот же объект Action между всеми парсерами, а set_defaults() мутирует
+    # action.default на месте — стоило бы задать здесь обычный False, и он
+    # перезаписал бы SUPPRESS и на родителе, и на всех субпарсерах разом,
+    # из-за чего второй проход (через субпарсер) затирал бы True, выставленный
+    # раньше. Раз default нигде не проставлен, main() подстраховывается через
+    # getattr(args, "verbose", False).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS)
+
+    parser = argparse.ArgumentParser(
+        prog="monitor.py", description="flight-sniper", parents=[common]
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--db", type=Path, default=runner.DEFAULT_DB)
-    parser.add_argument("--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("scan", help="скан кэша Aviasales")
-    backfill = sub.add_parser("backfill", help="стартовая месячная матрица")
+    sub.add_parser("scan", help="скан кэша Aviasales", parents=[common])
+    backfill = sub.add_parser(
+        "backfill", help="стартовая месячная матрица", parents=[common]
+    )
     backfill.add_argument("--force", action="store_true", help="игнорировать непустую базу")
-    sub.add_parser("digest", help="дайджест в Telegram")
+    sub.add_parser("digest", help="дайджест в Telegram", parents=[common])
+    sub.add_parser("commands", help="обработать команды Telegram", parents=[common])
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    verbose = getattr(args, "verbose", False)
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     cfg = Config.load(args.config)
@@ -46,8 +65,10 @@ def main(argv: list[str] | None = None) -> int:
             result = runner.run_scan(cfg, db_path=args.db)
         elif args.command == "backfill":
             result = runner.run_backfill(cfg, db_path=args.db, force=args.force)
-        else:
+        elif args.command == "digest":
             result = runner.run_digest(cfg, db_path=args.db)
+        else:
+            result = runner.run_commands(cfg, db_path=args.db)
     except runner.ConfigurationError as exc:
         logging.error("%s", exc)
         return 2

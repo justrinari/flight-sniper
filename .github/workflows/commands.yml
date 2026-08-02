@@ -1,14 +1,9 @@
-name: scan
+name: commands
 
 on:
   schedule:
-    - cron: "5 */4 * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
-    inputs:
-      backfill:
-        description: "Прогнать бэкфилл перед сканом"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -18,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scan:
+  commands:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,16 +24,10 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Restore database
         run: bash scripts/db_pull.sh
-      - name: Backfill
-        if: inputs.backfill
-        run: python monitor.py backfill
+      - name: Process commands
+        run: python monitor.py commands
         env:
-          TP_TOKEN: ${{ secrets.TP_TOKEN }}
-      - name: Scan
-        run: python monitor.py scan
-        env:
-          TP_TOKEN: ${{ secrets.TP_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       - name: Persist database
-        run: bash scripts/db_push.sh "scan $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        run: bash scripts/db_push.sh "commands $(date -u +%Y-%m-%dT%H:%M:%SZ)"

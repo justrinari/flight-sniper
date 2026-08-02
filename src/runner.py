@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from src import alerts, digest, fx, notify, rules, store
+from src import alerts, commands, digest, fx, notify, rules, store
 from src.config import Config
 from src.sources import aviasales
 
@@ -158,3 +158,39 @@ def run_digest(
 
     notify.send_message(session, bot_token, chat_id, text)
     return {"sent": True, "routes": routes}
+
+
+def run_commands(
+    cfg: Config, db_path: Path = DEFAULT_DB, now: Optional[str] = None, session=None
+) -> dict:
+    """Забирает команды через getUpdates и отвечает на каждую распознанную.
+
+    Для каждой команды берётся свежий _effective_config: порог (или другой
+    override) мог измениться предыдущей командой в этой же пачке.
+    """
+    now = now or store.utcnow()
+    bot_token = require_env("TG_BOT_TOKEN")
+    chat_id = require_env("TG_CHAT_ID")
+    session = session or requests.Session()
+    conn = _open(db_path)
+
+    texts = commands.fetch_updates(session, bot_token, conn, allowed_chat_id=chat_id)
+
+    handled = 0
+    for text in texts:
+        command, args = commands.parse(text)
+        if command is None:
+            continue
+
+        effective_cfg = _effective_config(conn, cfg)
+        reply = commands.handle(conn, effective_cfg, command, args, now)
+        try:
+            notify.send_message(session, bot_token, chat_id, reply)
+        except notify.TelegramError as exc:
+            LOG.warning("не удалось отправить ответ на %s: %s", command, exc)
+            continue
+        handled += 1
+
+    conn.close()
+    LOG.info("команды: обработано %d", handled)
+    return {"handled": handled}
