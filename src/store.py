@@ -219,3 +219,67 @@ def shift_days(iso_ts: str, days: float) -> str:
 
 def utcnow() -> str:
     return datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def record_alert(
+    conn: sqlite3.Connection,
+    route_date_key: str,
+    landed_usd: float,
+    sent_at: str,
+    level: str,
+    feedback: Optional[str] = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO alerts_sent (route_date_key, landed_usd, sent_at, level, feedback)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (route_date_key, landed_usd, sent_at, level, feedback),
+    )
+    conn.commit()
+
+
+def should_alert(
+    conn: sqlite3.Connection, route_date_key: str, landed_usd: float, drop_ratio: float
+) -> bool:
+    """Повторный алерт по той же связке — только если цена упала ещё на drop_ratio.
+
+    Сравнение идёт с САМЫМ ДЕШЁВЫМ из ранее отправленных алертов по этой связке,
+    а не с последним: иначе колебание цены вверх-вниз слало бы алерт на каждом
+    отскоке.
+    """
+    row = conn.execute(
+        "SELECT MIN(landed_usd) AS min_price FROM alerts_sent WHERE route_date_key = ?",
+        (route_date_key,),
+    ).fetchone()
+    min_price = row["min_price"]
+    if min_price is None:
+        return True
+    return landed_usd <= min_price * (1.0 - drop_ratio)
+
+
+def last_alert(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM alerts_sent ORDER BY sent_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+
+
+def set_last_feedback(conn: sqlite3.Connection, feedback: str) -> bool:
+    row = conn.execute(
+        "SELECT id FROM alerts_sent ORDER BY sent_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute("UPDATE alerts_sent SET feedback = ? WHERE id = ?", (feedback, row["id"]))
+    conn.commit()
+    return True
+
+
+def alert_stats(conn: sqlite3.Connection, since: str) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT feedback FROM alerts_sent WHERE sent_at >= ?", (since,)
+    ).fetchall()
+    return {
+        "total": len(rows),
+        "bought": sum(1 for r in rows if r["feedback"] == "bought"),
+        "mismatch": sum(1 for r in rows if r["feedback"] == "mismatch"),
+        "no_feedback": sum(1 for r in rows if r["feedback"] is None),
+    }
