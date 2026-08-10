@@ -287,3 +287,71 @@ def test_percentile_trigger_is_labelled_route(conn, config_stub):
     assert len(candidates) == 1
     assert candidates[0].trigger == rules.TRIGGER_ROUTE
 
+
+# --- baseline по дате вылета ------------------------------------------------
+#
+# Замер на живой базе за 02–10.08.2026: из шести ушедших алертов ни одного по
+# ALA-HKT, хотя именно там были две лучшие находки месяца — $280 на 17.10 при
+# обычных для этой даты $356 и $271 на 30.10. Маршрутный baseline их не видит:
+# на фоне минимума маршрута ($272) обе цены обычные. Аномальны они только
+# внутри своей даты.
+
+
+def test_date_anomaly_is_found_when_route_is_calm(conn, config_stub):
+    """Дата дорожает и дешевеет своей жизнью, маршрутный минимум её не замечает.
+
+    Цены "спокойной" даты слегка разные по дням не для красоты: идентичный
+    оффер не создаёт новую строку, у него лишь обновляется last_seen_at, и
+    повтор одной и той же цены дал бы одну точку истории вместо пяти.
+    """
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [300.0 + offset], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-17")
+        seed(conn, [520.0 + offset], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-18")
+    # сегодня: дешёвая дата в своём коридоре, дорогая рухнула — но всё ещё
+    # дороже дешёвой, так что минимум маршрута не сдвинулся
+    seed(conn, [302.0], now="2026-08-01T06:00:00Z", depart="2026-10-17")
+    seed(conn, [420.0], now="2026-08-01T06:00:00Z", depart="2026-10-18")
+
+    candidates = rules.find_candidates(conn, config_stub, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    assert candidates[0].depart_date == "2026-10-18"
+    assert candidates[0].trigger == rules.TRIGGER_DATE
+
+
+def test_date_without_enough_history_gives_no_candidate(conn, config_stub):
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [300.0 + offset], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-17")
+    seed(conn, [302.0], now="2026-08-01T06:00:00Z", depart="2026-10-17")
+    # у 18.10 всего два дня наблюдений — перцентиль по ней не считаем
+    seed(conn, [900.0], now="2026-07-31T06:00:00Z", depart="2026-10-18")
+    seed(conn, [420.0], now="2026-08-01T06:00:00Z", depart="2026-10-18")
+
+    assert rules.find_candidates(conn, config_stub, now="2026-08-01T07:00:00Z") == []
+
+
+def test_route_and_date_triggers_do_not_duplicate_the_same_offer(conn, config_stub):
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [520.0 + offset], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-18")
+    seed(conn, [200.0], now="2026-08-01T06:00:00Z", depart="2026-10-18")
+
+    candidates = rules.find_candidates(conn, config_stub, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    # обе ветки сработали, но маршрутная — более сильное утверждение
+    assert candidates[0].trigger == rules.TRIGGER_ROUTE
+
+
+def test_date_candidate_carries_that_dates_baseline(conn, config_stub):
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [300.0 + offset], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-17")
+        seed(conn, [500.0 + offset * 2], now=f"2026-07-{day}T06:00:00Z", depart="2026-10-18")
+    seed(conn, [302.0], now="2026-08-01T06:00:00Z", depart="2026-10-17")
+    seed(conn, [420.0], now="2026-08-01T06:00:00Z", depart="2026-10-18")
+
+    candidates = rules.find_candidates(conn, config_stub, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    # медиана 18.10 (500..508 и сегодняшние 420), а не всего маршрута — там ~302
+    assert candidates[0].baseline.median == 503.0
+

@@ -138,8 +138,9 @@ def _basis_line(c: rules.Candidate) -> str:
             return "порог маршрута сработал"
         return f"ниже порога маршрута ${threshold:.0f} (истории для медианы пока мало)"
     baseline = c.baseline
+    scope = "этой даты" if c.trigger == rules.TRIGGER_DATE else "маршрута"
     return (
-        f"медиана {baseline.median:.0f} {c.currency.upper()}, порог "
+        f"медиана {scope} {baseline.median:.0f} {c.currency.upper()}, порог "
         f"{baseline.anomaly_threshold:.0f} {c.currency.upper()} (n={baseline.n})"
     )
 

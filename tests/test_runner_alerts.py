@@ -175,3 +175,97 @@ def test_telegram_error_leaves_alert_unrecorded_for_retry(db, alert_cfg, tg_env)
     assert conn.execute("SELECT COUNT(*) FROM alerts_sent").fetchone()[0] == 0
     # т.к. запись не сделана, следующий скан снова попробует отправить алерт
     assert store.should_alert(conn, ROUTE_DATE_KEY, 1.76, drop_ratio=runner.ALERT_DROP_RATIO)
+
+
+# --- предел на число алертов за один ран ------------------------------------
+#
+# С появлением триггера по дате вылета кандидатов стало на порядок больше:
+# каждая из трёх десятков дат месяца может дать свой. Без предела один ран
+# мог бы выстрелить полусотней сообщений и полусотней запросов подтверждения.
+
+CHEAP_DATES = [f"2026-10-{day:02d}" for day in range(1, 11)]
+
+
+def _many_dates_payload(price=150):
+    return {
+        "success": True,
+        "currency": "kgs",
+        "data": [
+            {
+                "origin": "ALA",
+                "destination": "HKT",
+                "price": price,
+                "airline": "KC",
+                "departure_at": f"{depart}T10:15:00+06:00",
+                "transfers": 0,
+                "duration": 1500,
+                "duration_to": 760,
+                "link": f"/search/{depart}",
+                "currency": "kgs",
+                "gate": "City.Travel",
+            }
+            for depart in CHEAP_DATES
+        ],
+    }
+
+
+def _seed_many_dates(db_path):
+    """По пять дней истории на каждую дату — чтобы у всех был свой baseline."""
+    conn = store.connect(db_path)
+    store.init_schema(conn)
+    for depart in CHEAP_DATES:
+        for day, price in zip(range(20, 25), [300.0, 305.0, 310.0, 315.0, 320.0]):
+            rec = PriceRecord(
+                source="aviasales_cache",
+                origin="ALA",
+                destination="HKT",
+                market="kg",
+                depart_date=depart,
+                return_date=None,
+                price_local=price,
+                currency="kgs",
+                airline="KC",
+                transfers=0,
+                duration_min=1500,
+                duration_to_min=760,
+                search_url="https://x/search",
+                gate="City.Travel",
+            )
+            store.insert_prices(conn, [rec], now=f"2026-07-{day}T06:00:00Z")
+    conn.close()
+
+
+@responses.activate
+def test_alerts_per_run_are_capped(db, alert_cfg, tg_env):
+    _seed_many_dates(db)
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=_many_dates_payload(), status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+
+    one_way_cfg = dataclasses.replace(alert_cfg, trip_type="one_way")
+    result = runner.run_scan(one_way_cfg, db_path=db, now="2026-08-01T06:00:00Z")
+
+    assert result["alerts"] == runner.MAX_ALERTS_PER_RUN
+    assert result["alerts_skipped"] == len(CHEAP_DATES) - runner.MAX_ALERTS_PER_RUN
+    sent = [c for c in responses.calls if c.request.url.startswith(TG_URL)]
+    assert len(sent) == runner.MAX_ALERTS_PER_RUN
+
+
+@responses.activate
+def test_cheapest_candidates_win_the_cap(db, alert_cfg, tg_env):
+    """Предел отрезает хвост, а не случайные находки: уходят самые дешёвые."""
+    _seed_many_dates(db)
+    payload = _many_dates_payload()
+    # первая дата заметно дешевле остальных — она обязана пройти
+    payload["data"][0]["price"] = 100
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=payload, status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+
+    one_way_cfg = dataclasses.replace(alert_cfg, trip_type="one_way")
+    runner.run_scan(one_way_cfg, db_path=db, now="2026-08-01T06:00:00Z")
+
+    conn = store.connect(db)
+    keys = [r["route_date_key"] for r in conn.execute("SELECT * FROM alerts_sent")]
+    assert f"ALA-HKT-{CHEAP_DATES[0]}-" in keys
+

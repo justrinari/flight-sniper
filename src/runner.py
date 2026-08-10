@@ -21,6 +21,11 @@ LOG = logging.getLogger(__name__)
 DEFAULT_DB = Path("data/history.sqlite")
 RETENTION_DAYS = 120
 ALERT_DROP_RATIO = 0.05  # повторный алерт только при падении ещё на 5%
+# Кандидатов стало на порядок больше с триггером по дате вылета: каждая из
+# трёх десятков дат месяца может дать свой. Ран без предела выстрелил бы
+# десятками сообщений подряд и таким же числом запросов подтверждения.
+# Отрезается хвост: кандидаты отсортированы по цене, уходят самые дешёвые.
+MAX_ALERTS_PER_RUN = 5
 
 
 class ConfigurationError(RuntimeError):
@@ -46,19 +51,33 @@ def _effective_config(conn, cfg: Config) -> Config:
     return cfg.with_overrides(store.all_meta(conn))
 
 
-def _process_alerts(conn, cfg, session, token, rates, now: str) -> int:
-    """Ищет аномалии, подтверждает их и шлёт алерты. Возвращает число отправленных."""
+def _process_alerts(conn, cfg, session, token, rates, now: str) -> tuple[int, int]:
+    """Ищет аномалии, подтверждает их и шлёт алерты.
+
+    Возвращает (отправлено, отброшено пределом).
+    """
     if store.get_meta(conn, "paused") == "1":
-        return 0
+        return 0, 0
 
     bot_token = os.environ.get("TG_BOT_TOKEN")
     chat_id = os.environ.get("TG_CHAT_ID")
     if not bot_token or not chat_id:
         LOG.warning("TG_BOT_TOKEN/TG_CHAT_ID не заданы — алерты пропущены")
-        return 0
+        return 0, 0
+
+    candidates = rules.find_candidates(conn, cfg, now)
+    allowed, skipped = candidates[:MAX_ALERTS_PER_RUN], candidates[MAX_ALERTS_PER_RUN:]
+    if skipped:
+        LOG.warning(
+            "предел %d алертов за ран: отложено %d находок (самая дешёвая из них %s $%.0f)",
+            MAX_ALERTS_PER_RUN,
+            len(skipped),
+            skipped[0].route_date_key,
+            skipped[0].landed_usd,
+        )
 
     sent = 0
-    for candidate in rules.find_candidates(conn, cfg, now):
+    for candidate in allowed:
         if not store.should_alert(
             conn, candidate.route_date_key, candidate.landed_usd, ALERT_DROP_RATIO
         ):
@@ -75,7 +94,7 @@ def _process_alerts(conn, cfg, session, token, rates, now: str) -> int:
         store.record_alert(conn, candidate.route_date_key, candidate.landed_usd, now, result.level)
         sent += 1
 
-    return sent
+    return sent, len(skipped)
 
 
 def run_scan(
@@ -95,16 +114,17 @@ def run_scan(
     if records:
         store.set_meta(conn, "last_scan_at", now)
     store.set_meta(conn, "last_scan_errors", str(len(errors)))
-    sent_alerts = _process_alerts(conn, cfg, session, token, rates, now)
+    sent_alerts, skipped_alerts = _process_alerts(conn, cfg, session, token, rates, now)
     removed = store.prune(conn, before=store.shift_days(now, -RETENTION_DAYS))
     conn.close()
 
     LOG.info(
-        "скан: получено %d, вставлено %d, ошибок %d, алертов %d",
+        "скан: получено %d, вставлено %d, ошибок %d, алертов %d (отложено %d)",
         len(records),
         inserted,
         len(errors),
         sent_alerts,
+        skipped_alerts,
     )
     return {
         "fetched": len(records),
@@ -112,6 +132,7 @@ def run_scan(
         "pruned": removed,
         "errors": errors,
         "alerts": sent_alerts,
+        "alerts_skipped": skipped_alerts,
     }
 
 

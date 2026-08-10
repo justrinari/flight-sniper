@@ -290,8 +290,20 @@ def test_render_alert_without_baseline_and_without_threshold(absolute_candidate)
     assert "порог маршрута сработал" in text
 
 
+def test_render_alert_names_the_date_baseline(candidate, baseline):
+    """Медиана даты и медиана маршрута — разные утверждения, и это должно быть видно."""
+    result = alerts.ConfirmResult(
+        candidate=dataclasses.replace(candidate, trigger=rules.TRIGGER_DATE),
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36000.0,
+        confirmed_usd=411.0,
+        note="",
+    )
+    text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
+    assert "медиана этой даты 45000 KGS" in text
 
-def test_render_alert_with_baseline_still_shows_median(candidate):
+
+def test_render_alert_names_the_route_baseline(candidate):
     result = alerts.ConfirmResult(
         candidate=candidate,
         level=alerts.LEVEL_BUY,
@@ -300,4 +312,4 @@ def test_render_alert_with_baseline_still_shows_median(candidate):
         note="",
     )
     text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
-    assert "медиана 45000 KGS" in text
+    assert "медиана маршрута 45000 KGS" in text

@@ -1,7 +1,13 @@
 """Статистика и светофор.
 
-Baseline строится по маршруту в целом (все даты месяца вместе): по конкретной
-дате вылета записей слишком мало, чтобы перцентиль что-то значил.
+Baseline считается на двух уровнях сразу: по маршруту в целом (все даты месяца
+вместе) и отдельно по каждой дате вылета. Изначально был только маршрутный, и
+это оказалось дырой: замер на живой базе за 02–10.08.2026 дал шесть алертов и
+ни одного по ALA-HKT, хотя именно там были две лучшие находки месяца — $280 на
+17.10 при обычных для этой даты $356 и $271 на 30.10. На фоне минимума всего
+маршрута ($272) обе цены выглядят рядовыми; аномальны они только внутри своей
+даты. Датный baseline требует MIN_SAMPLE дней наблюдений по этой дате, поэтому
+на маршрутах с редкими данными он просто молчит.
 
 Важно, ЧТО именно попадает в выборку. Сравнивать сегодняшнюю минимальную цену
 со всеми ценами подряд бессмысленно: минимум по определению лежит ниже любого
@@ -147,6 +153,42 @@ def daily_minimums(
     return [(row["day"], float(row["best"])) for row in rows]
 
 
+def daily_minimums_by_date(
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    since: str,
+    market: Optional[str] = None,
+    column: str = "landed_usd",
+) -> dict[str, list[tuple[str, float]]]:
+    """То же, что daily_minimums, но отдельной историей на каждую дату вылета.
+
+    Одним запросом на маршрут, а не по запросу на дату: дат в месяце три
+    десятка, и цикл из тридцати SELECT'ов на каждый скан ничем не оправдан.
+    """
+    if column not in _DAILY_MIN_COLUMNS:
+        raise ValueError(f"daily_minimums_by_date: недопустимая колонка {column!r}")
+
+    sql = (
+        f"SELECT depart_date, substr(last_seen_at, 1, 10) AS day, MIN({column}) AS best"
+        " FROM price_history"
+        " WHERE origin = ? AND destination = ? AND last_seen_at >= ?"
+        f" AND {column} IS NOT NULL"
+    )
+    params: list[object] = [origin, destination, since]
+    if market is not None:
+        sql += " AND market = ?"
+        params.append(market)
+    sql += " GROUP BY depart_date, day ORDER BY depart_date, day"
+
+    grouped: dict[str, list[tuple[str, float]]] = {}
+    for row in conn.execute(sql, params):
+        grouped.setdefault(row["depart_date"], []).append(
+            (row["day"], float(row["best"]))
+        )
+    return grouped
+
+
 def falling_streak(daily: Sequence[tuple[str, float]]) -> int:
     """Сколько дней подряд минимум снижается, считая от последнего дня.
 
@@ -241,7 +283,14 @@ def _nights_word(n: int) -> str:
 
 
 TRIGGER_ROUTE = "route"  # дешевле p10 истории маршрута
+TRIGGER_DATE = "date"  # дешевле p10 истории этой даты вылета
 TRIGGER_ABSOLUTE = "absolute"  # дешевле абсолютного порога этого маршрута
+
+# Чем меньше число, тем сильнее утверждение: «дешевле, чем бывал весь маршрут»
+# весомее, чем «дешевле, чем бывала эта дата», а то и другое — весомее, чем
+# «дешевле круглой цифры». Порядок нужен, когда на одну находку сработало
+# несколько веток: в алерт уходит одна, самая сильная.
+_TRIGGER_PRECEDENCE = {TRIGGER_ROUTE: 0, TRIGGER_DATE: 1, TRIGGER_ABSOLUTE: 2}
 
 
 @dataclass(frozen=True)
@@ -370,5 +419,57 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                     )
                 )
 
+            by_date = daily_minimums_by_date(
+                conn,
+                origin,
+                destination,
+                since=window_start,
+                market=market,
+                column="price_local",
+            )
+            for row in _cheapest_per_date(fresh):
+                date_baseline = compute_baseline(
+                    [price for _, price in by_date.get(row["depart_date"], ())],
+                    cfg.anomaly_percentile,
+                )
+                if date_baseline is None:
+                    continue
+                if row["price_local"] < date_baseline.anomaly_threshold:
+                    candidates.append(
+                        _candidate(
+                            row,
+                            origin,
+                            destination,
+                            market,
+                            date_baseline,
+                            TRIGGER_DATE,
+                            threshold,
+                        )
+                    )
+
+    candidates = _strongest_per_offer(candidates)
     candidates.sort(key=lambda c: c.landed_usd)
     return candidates
+
+
+def _cheapest_per_date(rows: Sequence[sqlite3.Row]) -> list[sqlite3.Row]:
+    """По одной самой дешёвой записи на каждую дату вылета."""
+    best: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        current = best.get(row["depart_date"])
+        if current is None or row["price_local"] < current["price_local"]:
+            best[row["depart_date"]] = row
+    return list(best.values())
+
+
+def _strongest_per_offer(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """Одна находка — один алерт, даже если её нашли сразу несколько веток."""
+    best: dict[tuple[str, str], Candidate] = {}
+    for candidate in candidates:
+        key = (candidate.market, candidate.route_date_key)
+        current = best.get(key)
+        if current is None or (
+            _TRIGGER_PRECEDENCE[candidate.trigger] < _TRIGGER_PRECEDENCE[current.trigger]
+        ):
+            best[key] = candidate
+    return list(best.values())
