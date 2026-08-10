@@ -154,6 +154,14 @@ def _hour_word(n: int) -> str:
     return "часов"
 
 
+def _day_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
 def format_age(last_seen_at: Optional[str], now: str) -> str:
     """Насколько давно цена в последний раз подтвердилась в кэше.
 
@@ -170,7 +178,12 @@ def format_age(last_seen_at: Optional[str], now: str) -> str:
     if minutes < 60:
         return f"{minutes} {_minute_word(minutes)} назад"
     hours = minutes // 60
-    return f"{hours} {_hour_word(hours)} назад"
+    if hours < 24:
+        return f"{hours} {_hour_word(hours)} назад"
+    # Свежая цена никогда не бывает старше TTL, а вот пропавший оффер легко
+    # оказывается недельной давности — «168 часов назад» такое не читается.
+    days = hours // 24
+    return f"{days} {_day_word(days)} назад"
 
 
 def format_transfers(transfers: Optional[int]) -> str:
@@ -256,6 +269,110 @@ def format_thresholds(cfg) -> str:
         return f"${cfg.abs_threshold_usd:.0f}"
     parts.append(f"остальные ${cfg.abs_threshold_usd:.0f}")
     return " · ".join(parts)
+
+
+MAX_VANISHED_LINES = 5
+
+
+def _vanished_key(item: "rules.VanishedOffer") -> str:
+    return f"{item.origin}-{item.destination}-{item.depart_date}"
+
+
+@dataclass(frozen=True)
+class ReturnedOffer:
+    origin: str
+    destination: str
+    depart_date: str
+    current_landed_usd: Optional[float]
+
+
+@dataclass(frozen=True)
+class VanishedNews:
+    """Что изменилось с прошлой сводки, а не что происходит вообще.
+
+    Список пропавших дат живёт неделями и повторять его каждое утро незачем:
+    действие по нему — сходить проверить дату руками — делается один раз.
+    Новостью остаются два события: оффер пропал и оффер вернулся.
+    """
+
+    appeared: list["rules.VanishedOffer"]
+    returned: list[ReturnedOffer]
+    current_keys: list[str]
+
+
+def vanished_news(conn: sqlite3.Connection, cfg, now: str) -> VanishedNews:
+    gone = rules.vanished_offers(conn, cfg, now=now)
+    current = {_vanished_key(item): item for item in gone}
+
+    raw = store.get_meta(conn, "last_digest_vanished")
+    previous: list[str] = json.loads(raw) if raw else []
+
+    appeared = [item for key, item in current.items() if key not in previous]
+    returned = [
+        _returned_offer(conn, cfg, key, now) for key in previous if key not in current
+    ]
+    return VanishedNews(
+        appeared=appeared, returned=returned, current_keys=list(current)
+    )
+
+
+def _returned_offer(
+    conn: sqlite3.Connection, cfg, key: str, now: str
+) -> ReturnedOffer:
+    # Ключ собран как ORIGIN-DESTINATION-YYYY-MM-DD, а в дате тоже дефисы —
+    # поэтому режем ровно два раза.
+    origin, destination, depart_date = key.split("-", 2)
+    return ReturnedOffer(
+        origin=origin,
+        destination=destination,
+        depart_date=depart_date,
+        current_landed_usd=rules.best_fresh_for_date(
+            conn, cfg, origin, destination, depart_date, now=now
+        ),
+    )
+
+
+def render_returned(returned: Sequence[ReturnedOffer]) -> list[str]:
+    if not returned:
+        return []
+    lines = ["✅ <b>Вернулось в кэш</b>"]
+    for item in returned:
+        route = cities.route(item.origin, item.destination)
+        day = format_day(item.depart_date)
+        if item.current_landed_usd is None:
+            lines.append(f"{route} {day} — цена снова в норме")
+        else:
+            lines.append(f"{route} {day} — снова <b>${item.current_landed_usd:.0f}</b>")
+    return lines
+
+
+def render_vanished(gone: Sequence["rules.VanishedOffer"], now: str = "") -> list[str]:
+    """Блок «пропало из кэша»: что было, когда исчезло и чем заменилось.
+
+    Без него исчезновение записи неотличимо от подорожания — сводка показывает
+    следующий по цене оффер как лучшую цену дня.
+    """
+    if not gone:
+        return []
+
+    lines = ["👻 <b>Пропало из кэша</b>"]
+    for item in gone[:MAX_VANISHED_LINES]:
+        route = cities.route(item.origin, item.destination)
+        day = format_day(item.depart_date)
+        airline = html.escape(airlines.name(item.gone_airline))
+        percent = round(item.gap_ratio * 100)
+        line = (
+            f"{route} {day} — было <b>${item.gone_landed_usd:.0f}</b> ({airline})"
+        )
+        age = format_age(item.gone_last_seen_at, now) if now else ""
+        if age:
+            line += f", пропал {age}"
+        line += f"; сейчас ${item.current_landed_usd:.0f} (+{percent}%)"
+        lines.append(line)
+    hidden = len(gone) - MAX_VANISHED_LINES
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden} — полный список в базе")
+    return lines
 
 
 def dead_man_switch(
@@ -391,7 +508,11 @@ def _arbitrage_reason_changed(finding: "arbitrage.Finding", last_ratio: float) -
 
 
 def decide_digest(
-    conn: sqlite3.Connection, cfg, summaries: Sequence[RouteSummary], now: str
+    conn: sqlite3.Connection,
+    cfg,
+    summaries: Sequence[RouteSummary],
+    now: str,
+    news: Optional[VanishedNews] = None,
 ) -> DigestDecision:
     """Решает, заслуживает ли сегодняшний день полной сводки или хватит одной строки.
 
@@ -456,6 +577,19 @@ def decide_digest(
     if last_arbitrage and not current_arbitrage:
         reasons.append("арбитраж исчез")
 
+    # Пропажа и возврат — события, каждое звучит по одному разу. Список
+    # пропавших дат живёт неделями, и повторять его каждое утро незачем.
+    if news is None:
+        news = vanished_news(conn, cfg, now=now)
+    for item in news.appeared:
+        route = cities.route(item.origin, item.destination)
+        day = format_day(item.depart_date)
+        reasons.append(f"{route} {day}: пропал оффер за ${item.gone_landed_usd:.0f}")
+    for back in news.returned:
+        route = cities.route(back.origin, back.destination)
+        day = format_day(back.depart_date)
+        reasons.append(f"{route} {day}: оффер вернулся")
+
     trends = render_trends(conn, cfg, now=now)
     if trends:
         reasons.append("есть тренды")
@@ -510,7 +644,11 @@ def build_digest_text(
     conn: sqlite3.Connection, cfg, now: str, force_full: bool = False
 ) -> str:
     summaries = build_all_summaries(conn, cfg, now=now)
-    decision = decide_digest(conn, cfg, summaries, now=now)
+    # Новости о пропажах считаются ДО записи meta и переиспользуются дальше:
+    # после записи прошлое состояние сравнялось бы с текущим и все события
+    # исчезли бы ещё до рендера.
+    news = vanished_news(conn, cfg, now=now)
+    decision = decide_digest(conn, cfg, summaries, now=now, news=news)
     full = force_full or decision.full
     findings = arbitrage.find(conn, cfg, now=now)
 
@@ -521,6 +659,7 @@ def build_digest_text(
     store.set_meta(
         conn, "last_digest_arbitrage", json.dumps(_current_arbitrage(findings))
     )
+    store.set_meta(conn, "last_digest_vanished", json.dumps(news.current_keys))
 
     if force_full and not decision.full:
         LOG.info("дайджест: полная сводка по запросу (force_full)")
@@ -541,6 +680,14 @@ def build_digest_text(
         blocks.append(switch)
 
     blocks.append(render_digest(summaries, cfg, now=now))
+
+    vanished_lines = render_vanished(news.appeared, now=now)
+    if vanished_lines:
+        blocks.append("\n".join(vanished_lines))
+
+    returned_lines = render_returned(news.returned)
+    if returned_lines:
+        blocks.append("\n".join(returned_lines))
 
     if findings:
         arb_lines = ["🔄 <b>Кросс-рыночный арбитраж</b>"]

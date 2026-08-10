@@ -452,6 +452,106 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
     return candidates
 
 
+@dataclass(frozen=True)
+class VanishedOffer:
+    origin: str
+    destination: str
+    depart_date: str
+    gone_landed_usd: float
+    gone_airline: Optional[str]
+    gone_last_seen_at: str
+    current_landed_usd: float
+
+    @property
+    def gap_ratio(self) -> float:
+        """На сколько текущая лучшая цена хуже пропавшей: 0.27 = на 27% дороже."""
+        return self.current_landed_usd / self.gone_landed_usd - 1.0
+
+
+def best_fresh_for_date(
+    conn: sqlite3.Connection,
+    cfg,
+    origin: str,
+    destination: str,
+    depart_date: str,
+    now: str,
+) -> Optional[float]:
+    """Лучшая живая цена на конкретную дату вылета, None — если её нет."""
+    prices = [
+        float(row["landed_usd"])
+        for row in store.fresh_prices(
+            conn,
+            origin,
+            destination,
+            now=now,
+            ttl_hours=cfg.cache_ttl_hours,
+        )
+        if row["landed_usd"] is not None and row["depart_date"] == depart_date
+    ]
+    return min(prices) if prices else None
+
+
+def vanished_offers(conn: sqlite3.Connection, cfg, now: str) -> list[VanishedOffer]:
+    """Даты, где лучший оффер выпал из кэша, а замена заметно дороже.
+
+    Без этого пропажа неотличима от подорожания: дайджест показывает следующую
+    по цене запись как «лучшую цену дня», хотя рейс никуда не делся — исчезла
+    только запись о нём. Считается по датам вылета, потому что пропадают
+    именно даты: у маршрута в целом минимум обычно держит какая-нибудь другая.
+    """
+    window_start = store.shift_days(now, -cfg.baseline_window_days)
+    found: list[VanishedOffer] = []
+
+    for origin, destination in cfg.routes():
+        best_ever: dict[str, sqlite3.Row] = {}
+        for row in store.recent_prices(
+            conn,
+            origin,
+            destination,
+            since=window_start,
+        ):
+            if row["landed_usd"] is None:
+                continue
+            current = best_ever.get(row["depart_date"])
+            if current is None or row["landed_usd"] < current["landed_usd"]:
+                best_ever[row["depart_date"]] = row
+
+        best_fresh: dict[str, float] = {}
+        for row in store.fresh_prices(
+            conn, origin, destination, now=now, ttl_hours=cfg.cache_ttl_hours
+        ):
+            if row["landed_usd"] is None:
+                continue
+            price = float(row["landed_usd"])
+            if price < best_fresh.get(row["depart_date"], float("inf")):
+                best_fresh[row["depart_date"]] = price
+
+        for depart_date, gone in best_ever.items():
+            current_price = best_fresh.get(depart_date)
+            # Даты без единой свежей цены сюда не попадают: это не «пропал
+            # хороший оффер», а «нет данных», и об этом дайджест говорит
+            # отдельной строкой по маршруту.
+            if current_price is None:
+                continue
+            gone_price = float(gone["landed_usd"])
+            if current_price < gone_price * (1.0 + cfg.vanished_delta):
+                continue
+            found.append(
+                VanishedOffer(
+                    origin=origin,
+                    destination=destination,
+                    depart_date=depart_date,
+                    gone_landed_usd=gone_price,
+                    gone_airline=gone["airline"],
+                    gone_last_seen_at=gone["last_seen_at"],
+                    current_landed_usd=current_price,
+                )
+            )
+
+    found.sort(key=lambda item: item.gap_ratio, reverse=True)
+    return found
+
+
 def _cheapest_per_date(rows: Sequence[sqlite3.Row]) -> list[sqlite3.Row]:
     """По одной самой дешёвой записи на каждую дату вылета."""
     best: dict[str, sqlite3.Row] = {}

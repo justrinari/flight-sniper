@@ -36,6 +36,7 @@ OVERRIDABLE: dict[str, Any] = {
     "anomaly_percentile": float,
     "cross_market_delta": float,
     "digest_quiet_delta": float,
+    "vanished_delta": float,
     "extra_routes": lambda value: [tuple(pair) for pair in json.loads(value)],
 }
 
@@ -63,6 +64,9 @@ class Config:
     timezone: str
     extra_routes: tuple[tuple[str, str], ...] = ()
     digest_quiet_delta: float = 0.05
+    # Насколько лучшая свежая цена на дату должна быть хуже пропавшей из
+    # кэша, чтобы об этом стоило сказать.
+    vanished_delta: float = 0.07
     # Порог BUY по конкретному маршруту, ключ "ORIGIN-DESTINATION". Общий
     # abs_threshold_usd — фон для маршрутов, которых здесь нет.
     route_thresholds_usd: dict[str, float] = dataclasses.field(default_factory=dict)
@@ -104,6 +108,7 @@ class Config:
             digest_time=str(raw.get("digest_time", "09:00")),
             timezone=str(raw.get("timezone", "Asia/Bishkek")),
             digest_quiet_delta=float(raw.get("digest_quiet_delta", 0.05)),
+            vanished_delta=float(raw.get("vanished_delta", 0.07)),
             route_thresholds_usd={
                 str(k): float(v)
                 for k, v in (raw.get("route_thresholds_usd") or {}).items()

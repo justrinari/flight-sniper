@@ -330,3 +330,14 @@ def test_digest_footer_lists_route_thresholds(conn, config_stub):
     assert "Бишкек → Бали $350" in text
     assert "остальные $250" in text
 
+
+def test_format_age_days_plural_forms():
+    """Пропавший оффер может быть недельной давности — часами это уже не читается."""
+    assert digest.format_age("2026-07-31T06:30:00Z", "2026-08-01T06:30:00Z") == "1 день назад"
+    assert digest.format_age("2026-07-30T06:30:00Z", "2026-08-01T06:30:00Z") == "2 дня назад"
+    assert digest.format_age("2026-07-27T06:30:00Z", "2026-08-01T06:30:00Z") == "5 дней назад"
+    assert digest.format_age("2026-07-21T06:30:00Z", "2026-08-01T06:30:00Z") == "11 дней назад"
+
+
+def test_format_age_just_under_a_day_is_still_hours():
+    assert digest.format_age("2026-07-31T07:30:00Z", "2026-08-01T06:30:00Z") == "23 часа назад"

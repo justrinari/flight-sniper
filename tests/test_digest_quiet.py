@@ -5,11 +5,12 @@ decide_digest() решает full/quiet и объясняет причину; re
 записать last_digest_prices при каждой отправке.
 """
 
+import dataclasses
 import json
 
 import pytest
 
-from src import arbitrage, digest, store
+from src import arbitrage, digest, rules, store
 from src.models import PriceRecord
 
 
@@ -351,3 +352,172 @@ def test_build_digest_text_force_full_overrides_quiet(conn, config_stub):
     quiet_setup(conn)
     text = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
     assert "landed USD" in text
+
+
+# ---------------------------------------------------------------------------
+# пропавшие из кэша офферы
+# ---------------------------------------------------------------------------
+
+
+def seed_lasting(conn, landed, first_seen, hours_alive=6, **kwargs):
+    """Оффер, проживший несколько проходов скана и затем исчезнувший.
+
+    Время жизни задаётся явно: увиденный в одном проходе оффер — фантом кэша,
+    и пропажей он не считается (см. rules._lived_long_enough).
+    """
+    seed(conn, landed, now=first_seen, **kwargs)
+    conn.execute(
+        "UPDATE price_history SET last_seen_at = ? WHERE landed_usd = ?",
+        (store.shift_hours(first_seen, hours_alive), landed),
+    )
+    conn.commit()
+
+
+def _seed_vanished(conn):
+    """На ALA-HKT 17.10 был оффер за $280, теперь лучшее — $356."""
+    seed_lasting(conn, 280.0, first_seen="2026-07-25T09:00:00Z", depart="2026-10-17")
+    seed(conn, 356.0, now=SEEN_AT, depart="2026-10-17")
+
+
+def test_render_vanished_names_price_airline_and_gap(conn, config_stub):
+    _seed_vanished(conn)
+    gone = rules.vanished_offers(conn, config_stub, now=NOW)
+
+    lines = digest.render_vanished(gone)
+
+    assert lines[0].startswith("👻")
+    assert "Алматы → Пхукет 17.10" in lines[1]
+    assert "было <b>$280</b>" in lines[1]
+    assert "Air Astana" in lines[1]
+    assert "сейчас $356" in lines[1]
+    assert "+27%" in lines[1]
+
+
+def test_render_vanished_is_empty_without_findings():
+    assert digest.render_vanished([]) == []
+
+
+def test_render_vanished_limits_the_list(conn, config_stub):
+    for day in range(10, 20):
+        seed_lasting(
+            conn, 200.0 + day, first_seen="2026-07-25T09:00:00Z", depart=f"2026-10-{day}"
+        )
+        seed(conn, 400.0, now=SEEN_AT, depart=f"2026-10-{day}")
+    gone = rules.vanished_offers(conn, config_stub, now=NOW)
+
+    lines = digest.render_vanished(gone)
+
+    assert len(gone) == 10
+    # заголовок + MAX строк + строка про остаток
+    assert len(lines) == 2 + digest.MAX_VANISHED_LINES
+    assert f"и ещё {10 - digest.MAX_VANISHED_LINES}" in lines[-1]
+
+
+def test_decide_digest_new_vanished_offer_is_full(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+
+    assert decision.full
+    assert any("пропал" in reason for reason in decision.reasons)
+
+
+def test_decide_digest_already_reported_vanished_offer_is_quiet(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+    # первая сводка уже назвала эту пропажу
+    digest.build_digest_text(conn, config_stub, now=NOW)
+
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+
+    assert not any("пропал" in reason for reason in decision.reasons)
+
+
+def test_full_digest_contains_the_vanished_block(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+
+    text = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
+
+    assert "Пропало из кэша" in text
+
+
+def test_render_vanished_says_when_the_offer_disappeared(conn, config_stub):
+    _seed_vanished(conn)
+    gone = rules.vanished_offers(conn, config_stub, now=NOW)
+
+    lines = digest.render_vanished(gone, now=NOW)
+
+    assert "пропал 6 дней назад" in lines[1]
+
+
+# ---------------------------------------------------------------------------
+# пропажи и возвраты как события, а не как состояние
+# ---------------------------------------------------------------------------
+
+
+def test_vanished_news_reports_only_what_is_new(conn, config_stub):
+    _seed_vanished(conn)
+
+    first = digest.vanished_news(conn, config_stub, now=NOW)
+    assert [v.depart_date for v in first.appeared] == ["2026-10-17"]
+
+    store.set_meta(conn, "last_digest_vanished", json.dumps(first.current_keys))
+    second = digest.vanished_news(conn, config_stub, now=NOW)
+    assert second.appeared == []
+    assert second.returned == []
+
+
+def test_vanished_news_reports_the_offer_coming_back(conn, config_stub):
+    _seed_vanished(conn)
+    news = digest.vanished_news(conn, config_stub, now=NOW)
+    store.set_meta(conn, "last_digest_vanished", json.dumps(news.current_keys))
+
+    # оффер вернулся: на 17.10 снова есть цена рядом с прежними $280
+    seed_lasting(conn, 281.0, first_seen=SEEN_AT, hours_alive=1, depart="2026-10-17")
+
+    back = digest.vanished_news(conn, config_stub, now=NOW)
+
+    assert back.appeared == []
+    assert [(r.destination, r.depart_date) for r in back.returned] == [("HKT", "2026-10-17")]
+    assert back.returned[0].current_landed_usd == 281.0
+
+
+def test_digest_shows_the_vanished_block_once(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+
+    first = digest.build_digest_text(conn, config_stub, now=NOW)
+    assert "Пропало из кэша" in first
+
+    second = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
+    assert "Пропало из кэша" not in second
+
+
+def test_digest_renders_the_return_block(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+    digest.build_digest_text(conn, config_stub, now=NOW)
+
+    seed_lasting(conn, 281.0, first_seen=SEEN_AT, hours_alive=1, depart="2026-10-17")
+    text = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
+
+    assert "Вернулось в кэш" in text
+    assert "17.10" in text
+
+
+def test_returned_offer_makes_the_digest_full(conn, config_stub):
+    quiet_setup(conn)
+    _seed_vanished(conn)
+    digest.build_digest_text(conn, config_stub, now=NOW)
+
+    seed_lasting(conn, 281.0, first_seen=SEEN_AT, hours_alive=1, depart="2026-10-17")
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+
+    assert decision.full
+    assert any("вернул" in reason for reason in decision.reasons)
+

@@ -249,3 +249,12 @@ def test_threshold_override_via_meta_shifts_only_the_global_default(tmp_path, co
     assert cfg.threshold_for("ALA", "HKT") == 265
     assert cfg.threshold_for("BSZ", "HKT") == 200
 
+
+def test_vanished_delta_has_default(config_path):
+    cfg = Config.load(config_path)
+    assert cfg.vanished_delta == 0.07
+
+
+def test_vanished_delta_is_overridable_via_meta(config_path):
+    cfg = Config.load(config_path).with_overrides({"vanished_delta": "0.2"})
+    assert cfg.vanished_delta == 0.2
