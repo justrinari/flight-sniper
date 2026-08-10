@@ -613,9 +613,10 @@ def decide_digest(
         day = format_day(back.depart_date)
         reasons.append(f"{route} {day}: оффер вернулся")
 
-    trends = render_trends(conn, cfg, now=now)
-    if trends:
-        reasons.append("есть тренды")
+    # Тренды намеренно НЕ являются причиной полной сводки. Это описание
+    # состояния, а не событие: движение на 6% за неделю — ровно тот медленный
+    # фон, ради поглощения которого тихая сводка и делалась. Настоящий сдвиг
+    # цены ловится сравнением с прошлой сводкой (digest_quiet_delta) выше.
 
     last_report_at = store.get_meta(conn, "precision_reported_at")
     if precision_block(conn, now=now, last_report_at=last_report_at):

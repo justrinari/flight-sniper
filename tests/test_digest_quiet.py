@@ -549,3 +549,30 @@ def test_returned_offer_makes_the_digest_full(conn, config_stub):
     assert decision.full
     assert any("вернул" in reason for reason in decision.reasons)
 
+
+def test_trends_alone_do_not_make_the_digest_full(conn, config_stub):
+    """Тренд — описание состояния, а не событие.
+
+    Движение на несколько процентов за неделю — тот самый медленный фон,
+    ради поглощения которого тихая сводка и делалась. Настоящий сдвиг ловит
+    сравнение с прошлой сводкой (digest_quiet_delta).
+    """
+    quiet_setup(conn)
+    # позапрошлая неделя: ALA-HKT стоил заметно дороже — появится строка тренда
+    seed(conn, 400.0, now="2026-07-22T06:00:00Z", origin="ALA", destination="HKT")
+
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    decision = digest.decide_digest(conn, config_stub, summaries, now=NOW)
+
+    assert digest.render_trends(conn, config_stub, now=NOW), "тренд должен существовать"
+    assert not decision.full
+    assert decision.reasons == []
+
+
+def test_full_digest_still_shows_the_trends_block(conn, config_stub):
+    quiet_setup(conn)
+    seed(conn, 400.0, now="2026-07-22T06:00:00Z", origin="ALA", destination="HKT")
+
+    text = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
+
+    assert "Тренды" in text
