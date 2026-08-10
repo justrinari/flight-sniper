@@ -355,3 +355,46 @@ def test_date_candidate_carries_that_dates_baseline(conn, config_stub):
     # медиана 18.10 (500..508 и сегодняшние 420), а не всего маршрута — там ~302
     assert candidates[0].baseline.median == 503.0
 
+
+# --- фантомы не порождают алертов -------------------------------------------
+
+
+def _phantom(conn, price, now, **kwargs):
+    """Оффер, увиденный в одном проходе: scanned_at и last_seen_at совпадают."""
+    seed(conn, [price], now=now, **kwargs)
+
+
+def test_single_pass_offer_does_not_become_a_candidate(conn, config_stub):
+    """Кэш отдал невозможную цену один раз — будить владельца незачем."""
+    cfg = dataclasses.replace(config_stub, min_offer_lifetime_minutes=10)
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [300.0 + offset], now=f"2026-07-{day}T06:00:00Z")
+        conn.execute(
+            "UPDATE price_history SET last_seen_at = ? WHERE price_local = ?",
+            (f"2026-07-{day}T06:14:00Z", 300.0 + offset),
+        )
+    conn.commit()
+    _phantom(conn, 100.0, now="2026-08-01T06:00:00Z")
+
+    assert rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z") == []
+
+
+def test_offer_confirmed_by_a_second_pass_still_becomes_a_candidate(conn, config_stub):
+    cfg = dataclasses.replace(config_stub, min_offer_lifetime_minutes=10)
+    for offset, day in enumerate(range(20, 25)):
+        seed(conn, [300.0 + offset], now=f"2026-07-{day}T06:00:00Z")
+        conn.execute(
+            "UPDATE price_history SET last_seen_at = ? WHERE price_local = ?",
+            (f"2026-07-{day}T06:14:00Z", 300.0 + offset),
+        )
+    seed(conn, [100.0], now="2026-08-01T06:00:00Z")
+    conn.execute(
+        "UPDATE price_history SET last_seen_at = ? WHERE price_local = 100.0",
+        ("2026-08-01T06:14:00Z",),
+    )
+    conn.commit()
+
+    candidates = rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    assert candidates[0].price_local == 100.0

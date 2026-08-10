@@ -160,6 +160,12 @@ def insert_prices(conn: sqlite3.Connection, records: Iterable[PriceRecord], now:
     return count_rows(conn) - before
 
 
+# Сколько минут оффер прожил между первой и последней встречей. Проходы скана
+# идут раз в 14 минут, поэтому у оффера, увиденного дважды, значение ≥ 14, а у
+# записи, мелькнувшей в одном проходе, — около нуля.
+LIFETIME_MINUTES_SQL = "(julianday(last_seen_at) - julianday(scanned_at)) * 1440"
+
+
 def recent_prices(
     conn: sqlite3.Connection,
     origin: str,
@@ -167,6 +173,7 @@ def recent_prices(
     since: str,
     market: Optional[str] = None,
     source: Optional[str] = None,
+    min_lifetime_minutes: float = 0.0,
 ) -> list[sqlite3.Row]:
     sql = (
         "SELECT * FROM price_history WHERE origin = ? AND destination = ? AND last_seen_at >= ?"
@@ -178,6 +185,9 @@ def recent_prices(
     if source is not None:
         sql += " AND source = ?"
         params.append(source)
+    if min_lifetime_minutes > 0:
+        sql += f" AND {LIFETIME_MINUTES_SQL} >= ?"
+        params.append(min_lifetime_minutes)
     sql += " ORDER BY last_seen_at"
     return list(conn.execute(sql, params))
 
@@ -189,14 +199,26 @@ def fresh_prices(
     now: str,
     ttl_hours: int,
     market: Optional[str] = None,
+    min_lifetime_minutes: float = 0.0,
 ) -> list[sqlite3.Row]:
     """Записи, которые ещё можно показывать пользователю.
 
     Кэш Aviasales живёт ~48 часов. Протухшие строки остаются в базе для
     статистики, но в дайджест и алерты не попадают.
+
+    `min_lifetime_minutes` отсекает записи, встреченные лишь в одном проходе
+    скана: цена, которую при следующем запросе через 14 минут уже никто не
+    видит, не была настоящей.
     """
     cutoff = shift_hours(now, -ttl_hours)
-    rows = recent_prices(conn, origin, destination, since=cutoff, market=market)
+    rows = recent_prices(
+        conn,
+        origin,
+        destination,
+        since=cutoff,
+        market=market,
+        min_lifetime_minutes=min_lifetime_minutes,
+    )
     return [r for r in rows if r["expires_at"] is None or r["expires_at"] > now]
 
 

@@ -64,7 +64,13 @@ def build_route_summary(
     # минимум сравнивался бы с распределением, в котором он сам и есть минимум,
     # и светофор всегда горел бы зелёным. Пока дней наблюдения мало,
     # compute_baseline вернёт None — и это честнее выдуманного вердикта.
-    daily = rules.daily_minimums(conn, origin, destination, since=window_start)
+    daily = rules.daily_minimums(
+        conn,
+        origin,
+        destination,
+        since=window_start,
+        min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
+    )
     baseline = rules.compute_baseline(
         [price for _, price in daily], cfg.anomaly_percentile
     )
@@ -72,7 +78,12 @@ def build_route_summary(
     fresh = [
         row
         for row in store.fresh_prices(
-            conn, origin, destination, now=now, ttl_hours=cfg.cache_ttl_hours
+            conn,
+            origin,
+            destination,
+            now=now,
+            ttl_hours=cfg.cache_ttl_hours,
+            min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
         )
         if row["landed_usd"] is not None
     ]
@@ -398,13 +409,25 @@ def render_trends(conn: sqlite3.Connection, cfg, now: str) -> list[str]:
     lines: list[str] = []
     for origin, destination in cfg.routes():
         route = cities.route(origin, destination)
-        daily = rules.daily_minimums(conn, origin, destination, since=window_start)
+        daily = rules.daily_minimums(
+            conn,
+            origin,
+            destination,
+            since=window_start,
+            min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
+        )
         streak = rules.falling_streak(daily)
         if streak >= 2:
             lines.append(f"{route} дешевеет {streak}-й день подряд.")
             continue
 
-        delta = rules.week_delta(conn, origin, destination, now=now)
+        delta = rules.week_delta(
+            conn,
+            origin,
+            destination,
+            now=now,
+            min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
+        )
         if delta is not None and abs(delta) >= 0.05:
             percent = round(abs(delta) * 100)
             word = "дешевле" if delta < 0 else "дороже"

@@ -202,3 +202,20 @@ def test_render_line_escapes_html(finding):
     assert "A&amp;B" in line
     assert "A&B" not in line
     assert "a=1&amp;b=2" in line
+
+
+def test_single_pass_offer_does_not_create_arbitrage(conn, config_stub):
+    """Фантом в одном рынке выглядел бы как расхождение цен между рынками."""
+    cfg = dataclasses.replace(config_stub, min_offer_lifetime_minutes=10.0)
+    store.insert_prices(conn, [record(300.0, market="kg")], now="2026-08-01T06:00:00Z")
+    store.insert_prices(conn, [record(300.0, market="ru")], now="2026-08-01T06:00:00Z")
+    conn.execute(
+        "UPDATE price_history SET last_seen_at = '2026-08-01T06:14:00Z'"
+    )
+    # и поверх — фантом в kg вдвое дешевле, увиденный один раз
+    store.insert_prices(conn, [record(150.0, market="kg")], now="2026-08-01T06:20:00Z")
+    conn.commit()
+
+    findings = arbitrage.find(conn, cfg, now="2026-08-01T06:30:00Z")
+
+    assert all(f.cheap_usd != 150.0 for f in findings)

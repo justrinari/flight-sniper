@@ -25,4 +25,10 @@ def config_stub() -> Config:
         cache_ttl_hours=48,
         digest_time="09:00",
         timezone="Asia/Bishkek",
+        # Тесты сеют офферы одной вставкой, то есть с нулевым временем жизни:
+        # с боевым значением (10 минут) фильтр однопроходных записей отсёк бы
+        # их все и каждый тест проверял бы только его. Сам фильтр включают явно
+        # те тесты, которые его и проверяют — см. test_rules_vanished.py,
+        # test_store_prices.py и «фантомы» в test_rules_anomaly.py.
+        min_offer_lifetime_minutes=0.0,
     )

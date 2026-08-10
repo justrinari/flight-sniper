@@ -37,6 +37,7 @@ OVERRIDABLE: dict[str, Any] = {
     "cross_market_delta": float,
     "digest_quiet_delta": float,
     "vanished_delta": float,
+    "min_offer_lifetime_minutes": float,
     "extra_routes": lambda value: [tuple(pair) for pair in json.loads(value)],
 }
 
@@ -67,6 +68,11 @@ class Config:
     # Насколько лучшая свежая цена на дату должна быть хуже пропавшей из
     # кэша, чтобы об этом стоило сказать.
     vanished_delta: float = 0.07
+    # Сколько минут оффер должен прожить, чтобы система считала его
+    # существующим — в статистике, в алертах и в сводке. Проходы скана идут
+    # раз в 14 минут, так что оффер, увиденный хотя бы дважды, этот порог
+    # проходит, а мелькнувшая в одном проходе запись кэша — нет.
+    min_offer_lifetime_minutes: float = 10.0
     # Порог BUY по конкретному маршруту, ключ "ORIGIN-DESTINATION". Общий
     # abs_threshold_usd — фон для маршрутов, которых здесь нет.
     route_thresholds_usd: dict[str, float] = dataclasses.field(default_factory=dict)
@@ -109,6 +115,9 @@ class Config:
             timezone=str(raw.get("timezone", "Asia/Bishkek")),
             digest_quiet_delta=float(raw.get("digest_quiet_delta", 0.05)),
             vanished_delta=float(raw.get("vanished_delta", 0.07)),
+            min_offer_lifetime_minutes=float(
+                raw.get("min_offer_lifetime_minutes", 10.0)
+            ),
             route_thresholds_usd={
                 str(k): float(v)
                 for k, v in (raw.get("route_thresholds_usd") or {}).items()

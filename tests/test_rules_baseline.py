@@ -122,3 +122,74 @@ def test_daily_minimums_by_date_rejects_invalid_column(conn):
             conn, "ALA", "HKT", since="2026-07-01T00:00:00Z", column="1; DROP TABLE x"
         )
 
+
+# --- фантомы не попадают в статистику ---------------------------------------
+
+
+def _seen_for(conn, landed, depart, first_seen, minutes_alive):
+    store.insert_prices(conn, [_record(landed, depart)], now=first_seen)
+    conn.execute(
+        "UPDATE price_history SET last_seen_at = ? WHERE landed_usd = ?",
+        (store.shift_hours(first_seen, minutes_alive / 60.0), round(landed * 0.0114, 4)),
+    )
+    conn.commit()
+
+
+def test_daily_minimums_can_exclude_single_pass_offers(conn):
+    """Фантом за 3 секунды не должен становиться дневным минимумом.
+
+    Именно так $171 от 02.08.2026 попал в недельный тренд и превратил
+    падение $280 → $272 в «на 58% дороже, чем неделю назад».
+    """
+    _seen_for(conn, 171.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=0.05)
+    _seen_for(conn, 300.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=14)
+
+    result = rules.daily_minimums(
+        conn, "ALA", "HKT", since="2026-07-01T00:00:00Z", min_lifetime_minutes=10
+    )
+
+    assert result == [("2026-07-20", round(300.0 * 0.0114, 4))]
+
+
+def test_daily_minimums_by_date_can_exclude_single_pass_offers(conn):
+    _seen_for(conn, 171.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=0.05)
+    _seen_for(conn, 300.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=14)
+
+    grouped = rules.daily_minimums_by_date(
+        conn, "ALA", "HKT", since="2026-07-01T00:00:00Z", min_lifetime_minutes=10
+    )
+
+    assert grouped["2026-10-06"] == [("2026-07-20", round(300.0 * 0.0114, 4))]
+
+
+def test_week_delta_ignores_single_pass_offers(conn):
+    """Регрессия на конкретный случай: было $280 → стало $272, это −3%, а не +58%."""
+    _seen_for(conn, 171.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=0.05)
+    _seen_for(conn, 280.0, "2026-10-06", "2026-07-20T06:00:00Z", minutes_alive=14)
+    _seen_for(conn, 272.0, "2026-10-06", "2026-07-28T06:00:00Z", minutes_alive=14)
+
+    delta = rules.week_delta(
+        conn, "ALA", "HKT", now="2026-07-30T06:00:00Z", min_lifetime_minutes=10
+    )
+
+    assert delta == pytest.approx(272.0 / 280.0 - 1.0, abs=1e-3)
+
+
+def test_dow_factor_ignores_single_pass_offers(conn):
+    """Фантом на четверге сделал бы четверг «дешёвым днём» на пустом месте."""
+    for day, depart in enumerate(["2026-10-01", "2026-10-08", "2026-10-15",
+                                  "2026-10-22", "2026-10-29"], start=20):
+        _seen_for(conn, 300.0 + day, depart, f"2026-07-{day}T06:00:00Z", minutes_alive=14)
+    for day, depart in enumerate(["2026-10-02", "2026-10-09", "2026-10-16",
+                                  "2026-10-23", "2026-10-30"], start=20):
+        _seen_for(conn, 300.0 + day, depart, f"2026-07-{day}T06:00:00Z", minutes_alive=14)
+    # фантом на 01.10 (четверг) вдесятеро дешевле всего остального
+    _seen_for(conn, 30.0, "2026-10-01", "2026-07-25T06:00:00Z", minutes_alive=0.05)
+
+    clean = rules.dow_factor(
+        conn, "ALA", "HKT", "2026-10-01", now="2026-07-30T06:00:00Z",
+        min_lifetime_minutes=10,
+    )
+    polluted = rules.dow_factor(conn, "ALA", "HKT", "2026-10-01", now="2026-07-30T06:00:00Z")
+
+    assert clean > polluted

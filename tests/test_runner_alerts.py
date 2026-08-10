@@ -269,3 +269,55 @@ def test_cheapest_candidates_win_the_cap(db, alert_cfg, tg_env):
     keys = [r["route_date_key"] for r in conn.execute("SELECT * FROM alerts_sent")]
     assert f"ALA-HKT-{CHEAP_DATES[0]}-" in keys
 
+
+# --- подтверждение вторым проходом ------------------------------------------
+
+
+@responses.activate
+def test_new_offer_alerts_only_after_a_second_pass(db, alert_cfg, tg_env):
+    """Цена, увиденная впервые, ждёт подтверждения следующим проходом.
+
+    Стоит 14 минут задержки и отсекает записи, которых при следующем запросе
+    уже нет: на живой базе 18,4% офферов живут меньше одного прохода, и оба
+    оффера с невозможными ценами были из их числа.
+    """
+    _seed_history(db)
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=_cheap_payload(), status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+
+    cfg = dataclasses.replace(alert_cfg, min_offer_lifetime_minutes=10.0)
+
+    first = runner.run_scan(cfg, db_path=db, now="2026-08-01T06:00:00Z")
+    assert first["alerts"] == 0  # оффер увиден впервые — молчим
+
+    second = runner.run_scan(cfg, db_path=db, now="2026-08-01T06:14:00Z")
+    assert second["alerts"] == 1  # тот же оффер подтвердился — можно будить
+
+
+@responses.activate
+def test_offer_that_disappeared_after_one_pass_never_alerts(db, alert_cfg, tg_env):
+    """Невозможная цена мелькнула в одном проходе и исчезла — алерта нет никогда.
+
+    Во втором проходе кэш отдаёт уже другую цену, поэтому у записи с первой
+    так и остаётся одна встреча: подтвердить её нечем.
+    """
+    _seed_history(db)
+    responses.add(responses.GET, FX_URL, json=FX_PAYLOAD, status=200)
+    responses.add(responses.GET, PRICES_URL, json=_cheap_payload(price=50), status=200)
+    responses.add(responses.GET, PRICES_URL, json=_cheap_payload(price=320), status=200)
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+
+    cfg = dataclasses.replace(alert_cfg, min_offer_lifetime_minutes=10.0)
+
+    runner.run_scan(cfg, db_path=db, now="2026-08-01T06:00:00Z")
+    runner.run_scan(cfg, db_path=db, now="2026-08-01T06:14:00Z")
+    # третий проход подтверждает уже вторую, настоящую цену
+    runner.run_scan(cfg, db_path=db, now="2026-08-01T06:28:00Z")
+
+    conn = store.connect(db)
+    alerted = [round(r["landed_usd"], 2) for r in conn.execute("SELECT * FROM alerts_sent")]
+    phantom_usd = round(50 / 87.5 * 1.025, 2)
+    real_usd = round(320 / 87.5 * 1.025, 2)
+    assert phantom_usd not in alerted
+    assert alerted == [real_usd]

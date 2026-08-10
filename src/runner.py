@@ -179,7 +179,12 @@ def _refresh_best_prices(conn, cfg, session, token, rates, now: str) -> int:
         fresh = [
             row
             for row in store.fresh_prices(
-                conn, origin, destination, now=now, ttl_hours=cfg.cache_ttl_hours
+                conn,
+                origin,
+                destination,
+                now=now,
+                ttl_hours=cfg.cache_ttl_hours,
+                min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
             )
             if row["landed_usd"] is not None
         ]

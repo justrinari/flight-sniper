@@ -71,6 +71,7 @@ def find(conn: sqlite3.Connection, cfg, now: str) -> list[Finding]:
                     now=now,
                     ttl_hours=cfg.cache_ttl_hours,
                     market=market,
+                    min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
                 )
                 if row["landed_usd"] is not None
             ]

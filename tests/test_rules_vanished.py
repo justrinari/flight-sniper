@@ -31,6 +31,7 @@ def cfg(config_stub):
         markets=["kg"],
         market_currency={"kg": "kgs"},
         cache_ttl_hours=2,
+        min_offer_lifetime_minutes=10.0,  # боевое значение: тут его и проверяем
     )
 
 
@@ -56,7 +57,11 @@ def _record(landed, depart, airline="D7"):
 
 
 def _seed(conn, landed, depart, now, airline="D7", lifetime_minutes=60.0):
-    """Оффер, впервые увиденный в `now` и в последний раз — lifetime_minutes спустя."""
+    """Оффер, впервые увиденный в `now` и в последний раз — lifetime_minutes спустя.
+
+    Время жизни задаётся явно, потому что от него зависит, считается ли оффер
+    настоящим: увиденный в одном проходе и исчезнувший — это фантом кэша.
+    """
     store.insert_prices(conn, [_record(landed, depart, airline)], now=now)
     conn.execute(
         "UPDATE price_history SET last_seen_at = ?"
@@ -130,6 +135,29 @@ def test_sorted_by_gap_descending(conn, cfg):
     gone = rules.vanished_offers(conn, cfg, now=NOW)
 
     assert [g.depart_date for g in gone] == ["2026-10-17", "2026-10-22"]
+
+
+def test_offer_seen_in_a_single_pass_is_not_a_loss(conn, cfg):
+    """Фантом кэша не «пропал» — его никогда и не было.
+
+    На живой базе верхней строкой блока шёл оффер ALA-HKT на 06.10 за $171,
+    существовавший 3 секунды в одном проходе бэкфилла 02.08.2026. Блок,
+    затеянный против дезинформации, начинался бы с самой яркой из них.
+    """
+    _seed(conn, 171.0, "2026-10-06", now="2026-08-03T09:00:00Z", lifetime_minutes=0.05)
+    _seed(conn, 282.0, "2026-10-06", now=NOW, airline="CA")
+
+    assert rules.vanished_offers(conn, cfg, now=NOW) == []
+
+
+def test_offer_that_survived_several_passes_still_counts(conn, cfg):
+    """Два прохода скана — это 14 минут, порог ниже с запасом."""
+    _seed(conn, 280.0, "2026-10-17", now="2026-08-03T09:00:00Z", lifetime_minutes=14)
+    _seed(conn, 356.0, "2026-10-17", now=NOW, airline="CA")
+
+    gone = rules.vanished_offers(conn, cfg, now=NOW)
+
+    assert [g.depart_date for g in gone] == ["2026-10-17"]
 
 
 def test_best_fresh_for_date_returns_cheapest_live_price(conn, cfg):

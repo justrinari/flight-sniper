@@ -454,6 +454,34 @@ def test_render_vanished_says_when_the_offer_disappeared(conn, config_stub):
     assert "пропал 6 дней назад" in lines[1]
 
 
+def test_trends_ignore_single_pass_offers(conn, config_stub):
+    """Регрессия на «+58% дороже, чем неделю назад».
+
+    На живой базе 02.08.2026 мелькнул оффер ALA-HKT за $171, проживший
+    3 секунды. Он попал в корзину «предыдущая неделя», и падение $280 → $272
+    сводка объявила ростом на 58%.
+    """
+    cfg = dataclasses.replace(config_stub, min_offer_lifetime_minutes=10.0)
+    seed_lasting(conn, 280.0, first_seen="2026-07-22T06:00:00Z", origin="ALA")
+    seed(conn, 171.0, now="2026-07-22T06:00:00Z", origin="ALA")  # фантом, жизнь 0
+    seed_lasting(conn, 272.0, first_seen="2026-07-30T06:00:00Z", origin="ALA")
+
+    lines = digest.render_trends(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert not any("дороже" in line for line in lines)
+
+
+def test_summary_ignores_single_pass_offers(conn, config_stub):
+    """Фантом не должен становиться «лучшей ценой» в сводке."""
+    cfg = dataclasses.replace(config_stub, min_offer_lifetime_minutes=10.0)
+    seed_lasting(conn, 272.0, first_seen=SEEN_AT, hours_alive=1, origin="ALA")
+    seed(conn, 171.0, now=SEEN_AT, origin="ALA")  # фантом, жизнь 0
+
+    summary = digest.build_route_summary(conn, cfg, "ALA", "HKT", now=NOW)
+
+    assert summary.best_landed == 272.0
+
+
 # ---------------------------------------------------------------------------
 # пропажи и возвраты как события, а не как состояние
 # ---------------------------------------------------------------------------

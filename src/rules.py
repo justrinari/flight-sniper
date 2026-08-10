@@ -126,6 +126,7 @@ def daily_minimums(
     since: str,
     market: Optional[str] = None,
     column: str = "landed_usd",
+    min_lifetime_minutes: float = 0.0,
 ) -> list[tuple[str, float]]:
     """Минимальная цена по каждому дню наблюдения, по возрастанию даты.
 
@@ -147,6 +148,9 @@ def daily_minimums(
     if market is not None:
         sql += " AND market = ?"
         params.append(market)
+    if min_lifetime_minutes > 0:
+        sql += f" AND {store.LIFETIME_MINUTES_SQL} >= ?"
+        params.append(min_lifetime_minutes)
     sql += " GROUP BY day ORDER BY day"
 
     rows = conn.execute(sql, params).fetchall()
@@ -160,6 +164,7 @@ def daily_minimums_by_date(
     since: str,
     market: Optional[str] = None,
     column: str = "landed_usd",
+    min_lifetime_minutes: float = 0.0,
 ) -> dict[str, list[tuple[str, float]]]:
     """То же, что daily_minimums, но отдельной историей на каждую дату вылета.
 
@@ -179,6 +184,9 @@ def daily_minimums_by_date(
     if market is not None:
         sql += " AND market = ?"
         params.append(market)
+    if min_lifetime_minutes > 0:
+        sql += f" AND {store.LIFETIME_MINUTES_SQL} >= ?"
+        params.append(min_lifetime_minutes)
     sql += " GROUP BY depart_date, day ORDER BY depart_date, day"
 
     grouped: dict[str, list[tuple[str, float]]] = {}
@@ -207,7 +215,11 @@ def falling_streak(daily: Sequence[tuple[str, float]]) -> int:
 
 
 def week_delta(
-    conn: sqlite3.Connection, origin: str, destination: str, now: str
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    now: str,
+    min_lifetime_minutes: float = 0.0,
 ) -> Optional[float]:
     """Относительная разница минимума последних 7 дней к предыдущим 7.
 
@@ -215,7 +227,13 @@ def week_delta(
     """
     since_recent = store.shift_days(now, -7)
     since_prev = store.shift_days(now, -14)
-    daily = daily_minimums(conn, origin, destination, since=since_prev)
+    daily = daily_minimums(
+        conn,
+        origin,
+        destination,
+        since=since_prev,
+        min_lifetime_minutes=min_lifetime_minutes,
+    )
 
     recent_cutoff = since_recent[:10]
     recent = [price for day, price in daily if day >= recent_cutoff]
@@ -236,6 +254,7 @@ def dow_factor(
     depart_date: str,
     now: str,
     min_sample: int = MIN_SAMPLE,
+    min_lifetime_minutes: float = 0.0,
 ) -> float:
     """Множитель к baseline: насколько этот день недели дешевле среднего.
 
@@ -244,12 +263,16 @@ def dow_factor(
     поправка не должна срабатывать на шуме.
     """
     window_start = store.shift_days(now, -60)
-    rows = conn.execute(
+    sql = (
         "SELECT depart_date, landed_usd FROM price_history"
         " WHERE origin = ? AND destination = ? AND last_seen_at >= ?"
-        " AND landed_usd IS NOT NULL",
-        (origin, destination, window_start),
-    ).fetchall()
+        " AND landed_usd IS NOT NULL"
+    )
+    params: list[object] = [origin, destination, window_start]
+    if min_lifetime_minutes > 0:
+        sql += f" AND {store.LIFETIME_MINUTES_SQL} >= ?"
+        params.append(min_lifetime_minutes)
+    rows = conn.execute(sql, params).fetchall()
     if not rows:
         return 1.0
 
@@ -385,6 +408,7 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                 since=window_start,
                 market=market,
                 column="price_local",
+                min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
             )
             baseline = compute_baseline(
                 [price for _, price in daily], cfg.anomaly_percentile
@@ -399,6 +423,7 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                     now=now,
                     ttl_hours=cfg.cache_ttl_hours,
                     market=market,
+                    min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
                 )
                 if row["landed_usd"] is not None
             ]
@@ -426,6 +451,7 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                 since=window_start,
                 market=market,
                 column="price_local",
+                min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
             )
             for row in _cheapest_per_date(fresh):
                 date_baseline = compute_baseline(
@@ -485,6 +511,7 @@ def best_fresh_for_date(
             destination,
             now=now,
             ttl_hours=cfg.cache_ttl_hours,
+            min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
         )
         if row["landed_usd"] is not None and row["depart_date"] == depart_date
     ]
@@ -509,6 +536,7 @@ def vanished_offers(conn: sqlite3.Connection, cfg, now: str) -> list[VanishedOff
             origin,
             destination,
             since=window_start,
+            min_lifetime_minutes=cfg.min_offer_lifetime_minutes,
         ):
             if row["landed_usd"] is None:
                 continue

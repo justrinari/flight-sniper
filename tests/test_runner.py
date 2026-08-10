@@ -307,3 +307,28 @@ def test_run_digest_without_tp_token_still_sends_digest(db, config_stub, monkeyp
     assert result["refreshed"] == 0
     sent = [c for c in responses.calls if c.request.url.startswith(TG_URL)]
     assert len(sent) == 1
+
+
+@responses.activate
+def test_refresh_best_prices_ignores_single_pass_offers(db, single_route_cfg):
+    """Освежать надо настоящую лучшую цену, а не фантом, мелькнувший один раз."""
+    conn = store.connect(db)
+    store.insert_prices(
+        conn, [_price_record(landed=300.0, depart="2026-10-12")], now="2026-08-01T06:00:00Z"
+    )
+    conn.execute("UPDATE price_history SET last_seen_at = '2026-08-01T06:14:00Z'")
+    store.insert_prices(
+        conn,
+        [_price_record(landed=100.0, depart="2026-10-20", price_local=9000.0)],
+        now="2026-08-01T06:20:00Z",
+    )
+    conn.commit()
+    responses.add(responses.GET, PRICES_URL, json=CACHE_PAYLOAD, status=200)
+
+    cfg = dataclasses.replace(single_route_cfg, min_offer_lifetime_minutes=10.0)
+    runner._refresh_best_prices(
+        conn, cfg, requests.Session(), "TP", FX_RATES, now="2026-08-01T06:30:00Z"
+    )
+
+    assert "departure_at=2026-10-12" in responses.calls[0].request.url
+    conn.close()

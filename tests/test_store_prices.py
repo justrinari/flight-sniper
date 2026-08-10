@@ -166,3 +166,52 @@ def test_same_offer_from_another_gate_is_not_a_new_row(conn):
     assert store.count_rows(conn) == 1
     row = conn.execute("SELECT gate FROM price_history").fetchone()
     assert row["gate"] == "Wingie"
+
+
+# --- офферы, увиденные только в одном проходе --------------------------------
+#
+# Кэш Aviasales отдаёт записи, которых при следующем запросе уже нет: 18,4%
+# записей живут меньше 15 минут. Среди них оба оффера с невозможными ценами
+# ($171 и $261 на ALA-HKT, оба прожили по 3 секунды). Для системы такой оффер
+# существовать не должен — ни в статистике, ни в алертах.
+
+
+def _seen_twice(conn, price, first_seen, minutes_alive):
+    store.insert_prices(conn, [make_record(price_local=price)], now=first_seen)
+    conn.execute(
+        "UPDATE price_history SET last_seen_at = ? WHERE price_local = ?",
+        (store.shift_hours(first_seen, minutes_alive / 60.0), price),
+    )
+    conn.commit()
+
+
+def test_fresh_prices_can_exclude_single_pass_offers(conn):
+    _seen_twice(conn, 20000.0, "2026-08-01T06:00:00Z", minutes_alive=0)  # фантом
+    _seen_twice(conn, 38000.0, "2026-08-01T06:00:00Z", minutes_alive=14)
+
+    rows = store.fresh_prices(
+        conn, "FRU", "HKT", now="2026-08-01T06:30:00Z", ttl_hours=48,
+        min_lifetime_minutes=10,
+    )
+
+    assert [r["price_local"] for r in rows] == [38000.0]
+
+
+def test_fresh_prices_without_the_filter_keeps_everything(conn):
+    _seen_twice(conn, 20000.0, "2026-08-01T06:00:00Z", minutes_alive=0)
+    _seen_twice(conn, 38000.0, "2026-08-01T06:00:00Z", minutes_alive=14)
+
+    rows = store.fresh_prices(conn, "FRU", "HKT", now="2026-08-01T06:30:00Z", ttl_hours=48)
+
+    assert len(rows) == 2
+
+
+def test_recent_prices_can_exclude_single_pass_offers(conn):
+    _seen_twice(conn, 20000.0, "2026-07-20T06:00:00Z", minutes_alive=0)
+    _seen_twice(conn, 38000.0, "2026-07-20T06:00:00Z", minutes_alive=14)
+
+    rows = store.recent_prices(
+        conn, "FRU", "HKT", since="2026-07-01T00:00:00Z", min_lifetime_minutes=10
+    )
+
+    assert [r["price_local"] for r in rows] == [38000.0]
