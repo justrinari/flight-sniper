@@ -71,12 +71,27 @@ def compute_baseline(
 EMOJI = {GREEN: "🟢", YELLOW: "🟡", GRAY: "⚪"}
 
 
-def classify(landed_usd: float, baseline: Optional[Baseline], cfg) -> str:
+def threshold_for(cfg, route: Optional[tuple[str, str]]) -> float:
+    """Порог BUY маршрута, если он известен, иначе общий."""
+    if route is None:
+        return cfg.abs_threshold_usd
+    return cfg.threshold_for(*route)
+
+
+def classify(
+    landed_usd: float,
+    baseline: Optional[Baseline],
+    cfg,
+    route: Optional[tuple[str, str]] = None,
+) -> str:
     """GREEN — покупать, YELLOW — упомянуть в дайджесте, GRAY — фон.
 
     В v1 GREEN ставится по кэшу; в v1.1 BUY-алерт требует подтверждения Amadeus.
+
+    `route` включает порог этого маршрута вместо общего: цена, отличная для
+    Пхукета, для Бали — обычный фон.
     """
-    if landed_usd < cfg.abs_threshold_usd:
+    if landed_usd < threshold_for(cfg, route):
         return GREEN
     if baseline is None:
         return GRAY
@@ -225,6 +240,10 @@ def _nights_word(n: int) -> str:
     return _NIGHT_WORDS[2]
 
 
+TRIGGER_ROUTE = "route"  # дешевле p10 истории маршрута
+TRIGGER_ABSOLUTE = "absolute"  # дешевле абсолютного порога этого маршрута
+
+
 @dataclass(frozen=True)
 class Candidate:
     origin: str
@@ -239,8 +258,13 @@ class Candidate:
     transfers: Optional[int]
     gate: Optional[str]
     search_url: Optional[str]
-    baseline: Baseline  # в локальной валюте своего рынка, по дневным минимумам
+    # В локальной валюте своего рынка, по дневным минимумам. None, когда
+    # кандидат пришёл из абсолютного порога: тот не требует статистики и
+    # работает на маршрутах, где истории ещё нет.
+    baseline: Optional[Baseline]
     last_seen_at: Optional[str] = None
+    trigger: str = TRIGGER_ROUTE
+    threshold_usd: Optional[float] = None  # порог BUY маршрута на момент находки
 
     @property
     def route_date_key(self) -> str:
@@ -257,17 +281,53 @@ class Candidate:
         return f"{nights} {_nights_word(nights)}"
 
 
-def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
-    """Кандидаты-аномалии: сегодняшний минимум дешевле p10 истории дневных минимумов.
+def _candidate(
+    row: sqlite3.Row,
+    origin: str,
+    destination: str,
+    market: str,
+    baseline: Optional[Baseline],
+    trigger: str,
+    threshold_usd: float,
+) -> Candidate:
+    return Candidate(
+        origin=origin,
+        destination=destination,
+        market=market,
+        depart_date=row["depart_date"],
+        return_date=row["return_date"],
+        price_local=float(row["price_local"]),
+        currency=row["currency"],
+        landed_usd=float(row["landed_usd"]),
+        airline=row["airline"],
+        transfers=row["transfers"],
+        gate=row["gate"],
+        search_url=row["search_url"],
+        baseline=baseline,
+        last_seen_at=row["last_seen_at"],
+        trigger=trigger,
+        threshold_usd=threshold_usd,
+    )
 
-    Один кандидат на пару маршрут × рынок (самый дешёвый из свежих офферов),
-    не по одному на каждую дату вылета. Сравнение — в локальной валюте рынка,
-    чтобы движение курса не выглядело падением цены.
+
+def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
+    """Кандидаты на алерт по паре маршрут × рынок (самый дешёвый свежий оффер).
+
+    Два независимых триггера:
+    * перцентильный — сегодняшний минимум дешевле p10 истории дневных минимумов;
+      сравнение в локальной валюте рынка, чтобы движение курса не выглядело
+      падением цены;
+    * абсолютный — landed-цена ниже порога этого маршрута. Он не требует
+      статистики и потому работает там, где истории ещё нет.
+
+    Если сработали оба, кандидат помечается перцентильным: «дешевле, чем
+    бывало» — более сильное утверждение, чем «дешевле круглой цифры».
     """
     window_start = store.shift_days(now, -cfg.baseline_window_days)
     candidates: list[Candidate] = []
 
     for origin, destination in cfg.routes():
+        threshold = cfg.threshold_for(origin, destination)
         for market in cfg.markets:
             daily = daily_minimums(
                 conn,
@@ -280,8 +340,6 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
             baseline = compute_baseline(
                 [price for _, price in daily], cfg.anomaly_percentile
             )
-            if baseline is None:
-                continue
 
             fresh = [
                 row
@@ -299,23 +357,16 @@ def find_candidates(conn: sqlite3.Connection, cfg, now: str) -> list[Candidate]:
                 continue
 
             best = min(fresh, key=lambda row: row["price_local"])
-            if best["price_local"] < baseline.anomaly_threshold:
+            if baseline is not None and best["price_local"] < baseline.anomaly_threshold:
                 candidates.append(
-                    Candidate(
-                        origin=origin,
-                        destination=destination,
-                        market=market,
-                        depart_date=best["depart_date"],
-                        return_date=best["return_date"],
-                        price_local=float(best["price_local"]),
-                        currency=best["currency"],
-                        landed_usd=float(best["landed_usd"]),
-                        airline=best["airline"],
-                        transfers=best["transfers"],
-                        gate=best["gate"],
-                        search_url=best["search_url"],
-                        baseline=baseline,
-                        last_seen_at=best["last_seen_at"],
+                    _candidate(
+                        best, origin, destination, market, baseline, TRIGGER_ROUTE, threshold
+                    )
+                )
+            elif float(best["landed_usd"]) < threshold:
+                candidates.append(
+                    _candidate(
+                        best, origin, destination, market, None, TRIGGER_ABSOLUTE, threshold
                     )
                 )
 

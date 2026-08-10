@@ -201,3 +201,51 @@ def test_with_overrides_extra_routes_is_tuple_of_tuples(config_path):
     cfg = Config.load(config_path)
     updated = cfg.with_overrides({"extra_routes": '[["TAS", "HKT"]]'})
     assert updated.extra_routes == (("TAS", "HKT"),)
+
+
+def test_route_thresholds_default_to_empty(config_path):
+    cfg = Config.load(config_path)
+    assert cfg.route_thresholds_usd == {}
+
+
+def test_threshold_for_falls_back_to_global(config_path):
+    cfg = Config.load(config_path)
+    assert cfg.threshold_for("ALA", "HKT") == 250
+
+
+def test_threshold_for_uses_route_override(tmp_path, config_path):
+    path = tmp_path / "with_routes.yaml"
+    path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + textwrap.dedent(
+            """
+            route_thresholds_usd:
+              ALA-HKT: 265
+              ALA-DPS: 290
+            """
+        ),
+        encoding="utf-8",
+    )
+    cfg = Config.load(path)
+    assert cfg.threshold_for("ALA", "HKT") == 265
+    assert cfg.threshold_for("ALA", "DPS") == 290
+    assert cfg.threshold_for("BSZ", "DPS") == 250  # без своего порога — общий
+
+
+def test_threshold_override_via_meta_shifts_only_the_global_default(tmp_path, config_path):
+    """/threshold меняет общий порог; маршруты со своим порогом его не замечают."""
+    path = tmp_path / "with_routes.yaml"
+    path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + textwrap.dedent(
+            """
+            route_thresholds_usd:
+              ALA-HKT: 265
+            """
+        ),
+        encoding="utf-8",
+    )
+    cfg = Config.load(path).with_overrides({"abs_threshold_usd": "200"})
+    assert cfg.threshold_for("ALA", "HKT") == 265
+    assert cfg.threshold_for("BSZ", "HKT") == 200
+

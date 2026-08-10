@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from src import rules, store
@@ -12,6 +14,18 @@ def conn(tmp_path):
     connection = store.connect(tmp_path / "history.sqlite")
     store.init_schema(connection)
     return connection
+
+
+@pytest.fixture()
+def config_stub(config_stub):
+    """Абсолютный порог выключен для всего модуля.
+
+    Цены здесь — сотни сомов, то есть единицы долларов landed, и общий порог
+    $250 из conftest сделал бы кандидатом каждую запись. Тесты ниже проверяют
+    перцентильную ветку; абсолютную проверяют отдельные тесты в конце файла,
+    задавая порог явно.
+    """
+    return dataclasses.replace(config_stub, abs_threshold_usd=0.01)
 
 
 def _fx(market: str) -> float:
@@ -199,3 +213,77 @@ def test_daily_minimums_rejects_invalid_column(conn):
         rules.daily_minimums(
             conn, "FRU", "HKT", since="2026-07-01T00:00:00Z", column="price_local; DROP TABLE x"
         )
+
+
+# --- абсолютный порог как самостоятельный триггер ---------------------------
+#
+# Цены в этом модуле — сотни сомов, то есть единицы долларов landed. Общий
+# порог config_stub ($250) накрыл бы их все, поэтому тесты перцентильной ветки
+# работают с заведомо недостижимым порогом, а абсолютную ветку проверяют
+# отдельные тесты ниже, задавая порог явно.
+
+
+def _with_threshold(cfg, **routes):
+    return dataclasses.replace(
+        cfg, abs_threshold_usd=0.01, route_thresholds_usd=dict(routes)
+    )
+
+
+def test_price_below_route_threshold_is_candidate_without_percentile(conn, config_stub):
+    for day, price in enumerate([300.0, 305.0, 310.0, 315.0, 320.0], start=20):
+        seed(conn, [price], now=f"2026-07-{day}T06:00:00Z")
+    # 310 не аномалия: p10 выборки ниже неё — перцентильная ветка молчит
+    seed(conn, [310.0], now="2026-08-01T06:00:00Z")
+    # landed = 310 * 0.0114 = 3.534, порог маршрута выше
+    cfg = _with_threshold(config_stub, **{"FRU-HKT": 3.6})
+
+    candidates = rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    assert candidates[0].trigger == rules.TRIGGER_ABSOLUTE
+
+
+def test_absolute_threshold_fires_without_any_baseline(conn, config_stub):
+    """Двух дней истории мало для перцентиля, но абсолютный порог не требует статистики."""
+    seed(conn, [400.0], now="2026-07-31T06:00:00Z")
+    seed(conn, [310.0], now="2026-08-01T06:00:00Z")
+    cfg = _with_threshold(config_stub, **{"FRU-HKT": 3.6})
+
+    candidates = rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    assert candidates[0].baseline is None
+    assert candidates[0].trigger == rules.TRIGGER_ABSOLUTE
+
+
+def test_price_above_route_threshold_is_not_a_candidate(conn, config_stub):
+    seed(conn, [400.0], now="2026-07-31T06:00:00Z")
+    seed(conn, [310.0], now="2026-08-01T06:00:00Z")
+    cfg = _with_threshold(config_stub, **{"FRU-HKT": 3.4})  # landed 3.534 выше порога
+
+    assert rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z") == []
+
+
+def test_route_without_own_threshold_uses_global(conn, config_stub):
+    seed(conn, [400.0], now="2026-07-31T06:00:00Z")
+    seed(conn, [310.0], now="2026-08-01T06:00:00Z")
+    cfg = dataclasses.replace(
+        config_stub, abs_threshold_usd=3.6, route_thresholds_usd={"ALA-DPS": 0.01}
+    )
+
+    candidates = rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert [c.destination for c in candidates] == ["HKT"]
+
+
+def test_percentile_trigger_is_labelled_route(conn, config_stub):
+    for day, price in enumerate([300.0, 305.0, 310.0, 315.0, 320.0], start=20):
+        seed(conn, [price], now=f"2026-07-{day}T06:00:00Z")
+    seed(conn, [200.0], now="2026-08-01T06:00:00Z")
+    cfg = _with_threshold(config_stub)
+
+    candidates = rules.find_candidates(conn, cfg, now="2026-08-01T07:00:00Z")
+
+    assert len(candidates) == 1
+    assert candidates[0].trigger == rules.TRIGGER_ROUTE
+

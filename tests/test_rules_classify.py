@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from src import rules
@@ -55,3 +57,27 @@ def test_level_emoji_mapping():
     assert rules.level_emoji(rules.GREEN) == "🟢"
     assert rules.level_emoji(rules.YELLOW) == "🟡"
     assert rules.level_emoji(rules.GRAY) == "⚪"
+
+
+def _cfg_with_route_threshold(config_stub):
+    return dataclasses.replace(
+        config_stub, route_thresholds_usd={"ALA-DPS": 290.0}
+    )
+
+
+def test_route_threshold_makes_price_green(baseline, config_stub):
+    cfg = _cfg_with_route_threshold(config_stub)
+    # 289 выше общего порога 250 и выше p10 240, но ниже порога маршрута 290
+    assert rules.classify(289.0, baseline, cfg, route=("ALA", "DPS")) == rules.GREEN
+
+
+def test_route_without_own_threshold_uses_global(baseline, config_stub):
+    cfg = _cfg_with_route_threshold(config_stub)
+    # для BSZ-DPS порога нет, работает общий 250 — 289 остаётся фоном
+    assert rules.classify(289.0, baseline, cfg, route=("BSZ", "DPS")) == rules.GRAY
+
+
+def test_classify_without_route_keeps_global_threshold(baseline, config_stub):
+    cfg = _cfg_with_route_threshold(config_stub)
+    assert rules.classify(249.0, baseline, cfg) == rules.GREEN
+    assert rules.classify(289.0, baseline, cfg) == rules.GRAY

@@ -126,6 +126,24 @@ def confirm(session, token, cfg, candidate: rules.Candidate, rates, now) -> Conf
 _GATE_WARNING = "продавец-посредник: поддержка при отмене рейса будет хуже, чем у авиакомпании напрямую"
 
 
+def _basis_line(c: rules.Candidate) -> str:
+    """Чем обоснован алерт: статистикой маршрута или абсолютным порогом.
+
+    У кандидата от абсолютного порога baseline нет вовсе — он и нужен там,
+    где истории ещё не накопилось.
+    """
+    if c.baseline is None:
+        threshold = c.threshold_usd
+        if threshold is None:
+            return "порог маршрута сработал"
+        return f"ниже порога маршрута ${threshold:.0f} (истории для медианы пока мало)"
+    baseline = c.baseline
+    return (
+        f"медиана {baseline.median:.0f} {c.currency.upper()}, порог "
+        f"{baseline.anomaly_threshold:.0f} {c.currency.upper()} (n={baseline.n})"
+    )
+
+
 def render_alert(result: ConfirmResult, now: str) -> str:
     """`now` нужен, чтобы показать возраст цены кандидата: между обнаружением
     аномалии и тем, когда владелец прочитает алерт, проходит время, и это
@@ -172,11 +190,7 @@ def render_alert(result: ConfirmResult, now: str) -> str:
     if result.note:
         lines.append(html.escape(result.note))
 
-    baseline = c.baseline
-    lines.append(
-        f"медиана {baseline.median:.0f} {c.currency.upper()}, порог "
-        f"{baseline.anomaly_threshold:.0f} {c.currency.upper()} (n={baseline.n})"
-    )
+    lines.append(_basis_line(c))
 
     if c.search_url:
         lines.append(f'<a href="{html.escape(c.search_url, quote=True)}">поиск</a>')

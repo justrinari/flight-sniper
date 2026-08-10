@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 import requests
 import responses
@@ -249,3 +251,53 @@ def test_render_escapes_html(baseline):
     text = alerts.render_alert(result, "2026-08-01T00:10:00Z")
     assert "A&amp;B" in text
     assert "A&B" not in text
+
+
+@pytest.fixture()
+def absolute_candidate(candidate):
+    """Кандидат от абсолютного порога: статистики нет, baseline пуст."""
+    return dataclasses.replace(
+        candidate,
+        baseline=None,
+        trigger=rules.TRIGGER_ABSOLUTE,
+        threshold_usd=430.0,
+    )
+
+
+def test_render_alert_without_baseline_does_not_crash(absolute_candidate):
+    result = alerts.ConfirmResult(
+        candidate=absolute_candidate,
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36000.0,
+        confirmed_usd=411.0,
+        note="",
+    )
+    text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
+    assert "медиана" not in text
+    assert "ниже порога маршрута $430" in text
+
+
+def test_render_alert_without_baseline_and_without_threshold(absolute_candidate):
+    """Кандидат, собранный вручную: обоснования нет, но алерт не должен падать."""
+    result = alerts.ConfirmResult(
+        candidate=dataclasses.replace(absolute_candidate, threshold_usd=None),
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36000.0,
+        confirmed_usd=411.0,
+        note="",
+    )
+    text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
+    assert "порог маршрута сработал" in text
+
+
+
+def test_render_alert_with_baseline_still_shows_median(candidate):
+    result = alerts.ConfirmResult(
+        candidate=candidate,
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36000.0,
+        confirmed_usd=411.0,
+        note="",
+    )
+    text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
+    assert "медиана 45000 KGS" in text

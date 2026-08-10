@@ -104,7 +104,9 @@ def build_route_summary(
         market=best["market"],
         search_url=best["search_url"],
         baseline=baseline,
-        level=rules.classify(float(best["landed_usd"]), baseline, cfg),
+        level=rules.classify(
+            float(best["landed_usd"]), baseline, cfg, route=(origin, destination)
+        ),
         delta_pct=rules.delta_to_median(float(best["landed_usd"]), baseline),
         last_seen_at=best["last_seen_at"],
     )
@@ -236,10 +238,24 @@ def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
 
     lines.append("")
     lines.append(
-        f"<i>landed USD: цена рынка × курс × (1 + надбавка). Порог BUY: "
-        f"${cfg.abs_threshold_usd:.0f}</i>"
+        f"<i>landed USD: цена рынка × курс × (1 + надбавка). "
+        f"Порог BUY: {format_thresholds(cfg)}</i>"
     )
     return "\n".join(lines)
+
+
+def format_thresholds(cfg) -> str:
+    """Пороги BUY построчно: общий порог один, а маршруты разной дальности нет."""
+    parts = [
+        f"{cities.route(origin, destination)} "
+        f"${cfg.threshold_for(origin, destination):.0f}"
+        for origin, destination in cfg.routes()
+        if f"{origin}-{destination}" in cfg.route_thresholds_usd
+    ]
+    if not parts:
+        return f"${cfg.abs_threshold_usd:.0f}"
+    parts.append(f"остальные ${cfg.abs_threshold_usd:.0f}")
+    return " · ".join(parts)
 
 
 def dead_man_switch(

@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from src import digest, rules, store
@@ -303,3 +305,28 @@ def test_render_digest_shows_price_age(config_stub):
     ]
     text = digest.render_digest(summaries, config_stub, now="2026-08-01T06:30:00Z")
     assert "12 минут назад" in text
+
+
+def test_summary_uses_route_threshold_for_level(conn, config_stub):
+    """Порог маршрута решает цвет: та же цена зелёная на своём маршруте и серая на чужом."""
+    cfg = dataclasses.replace(config_stub, route_thresholds_usd={"FRU-HKT": 320.0})
+    seed(conn, [312.0])
+    summary = digest.build_route_summary(conn, cfg, "FRU", "HKT", now="2026-08-01T07:00:00Z")
+    assert summary.level == rules.GREEN
+
+    seed(conn, [312.0], destination="DPS")
+    other = digest.build_route_summary(conn, cfg, "FRU", "DPS", now="2026-08-01T07:00:00Z")
+    assert other.level == rules.GRAY
+
+
+def test_digest_footer_lists_route_thresholds(conn, config_stub):
+    cfg = dataclasses.replace(
+        config_stub, route_thresholds_usd={"FRU-HKT": 320.0, "FRU-DPS": 350.0}
+    )
+    seed(conn, [312.0])
+    summaries = digest.build_all_summaries(conn, cfg, now="2026-08-01T07:00:00Z")
+    text = digest.render_digest(summaries, cfg, now="2026-08-01T07:00:00Z")
+    assert "Бишкек → Пхукет $320" in text
+    assert "Бишкек → Бали $350" in text
+    assert "остальные $250" in text
+

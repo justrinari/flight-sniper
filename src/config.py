@@ -63,6 +63,9 @@ class Config:
     timezone: str
     extra_routes: tuple[tuple[str, str], ...] = ()
     digest_quiet_delta: float = 0.05
+    # Порог BUY по конкретному маршруту, ключ "ORIGIN-DESTINATION". Общий
+    # abs_threshold_usd — фон для маршрутов, которых здесь нет.
+    route_thresholds_usd: dict[str, float] = dataclasses.field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -101,6 +104,10 @@ class Config:
             digest_time=str(raw.get("digest_time", "09:00")),
             timezone=str(raw.get("timezone", "Asia/Bishkek")),
             digest_quiet_delta=float(raw.get("digest_quiet_delta", 0.05)),
+            route_thresholds_usd={
+                str(k): float(v)
+                for k, v in (raw.get("route_thresholds_usd") or {}).items()
+            },
         )
 
     def routes(self) -> list[tuple[str, str]]:
@@ -116,6 +123,17 @@ class Config:
             return self.market_currency[market]
         except KeyError as exc:
             raise KeyError(f"нет валюты для рынка {market!r} в market_currency") from exc
+
+    def threshold_for(self, origin: str, destination: str) -> float:
+        """Порог BUY для маршрута.
+
+        Единый порог на все маршруты бесполезен: $250 недостижимы для Бали и
+        для Бишкека, поэтому абсолютная ветка светофора никогда не срабатывала
+        (замер на живой базе за 02–10.08.2026: ноль срабатываний).
+        """
+        return self.route_thresholds_usd.get(
+            f"{origin}-{destination}", self.abs_threshold_usd
+        )
 
     def markup_for(self, currency: str) -> float:
         return self.fx_markup.get(currency.lower(), self.fx_markup["default"])
