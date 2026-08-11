@@ -262,7 +262,7 @@ def render_digest(summaries: Sequence[RouteSummary], cfg, now: str) -> str:
 
     lines.append("")
     lines.append(
-        f"<i>landed USD: цена рынка × курс × (1 + надбавка). "
+        f"<i>landed USD за одного взрослого: цена рынка × курс × (1 + надбавка). "
         f"Порог BUY: {format_thresholds(cfg)}</i>"
     )
     return "\n".join(lines)
@@ -652,7 +652,9 @@ def render_quiet(
     lines = [f"✈️ {local.strftime('%d.%m')} · тихо, цены на месте", " · ".join(parts)]
     age = format_age(freshest, now)
     if age:
-        lines.append(f"проверено {age}")
+        lines.append(f"проверено {age} · за одного взрослого")
+    else:
+        lines.append("цены за одного взрослого")
     if findings:
         best = findings[0]
         route = cities.route(best.origin, best.destination)

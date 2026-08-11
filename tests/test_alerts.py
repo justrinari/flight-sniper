@@ -313,3 +313,17 @@ def test_render_alert_names_the_route_baseline(candidate):
     )
     text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
     assert "медиана маршрута 45000 KGS" in text
+
+
+def test_alert_warns_the_price_covers_one_seat(candidate):
+    """Кэш отдаёт цену на одного, и наличие второго места по ней не гарантировано."""
+    result = alerts.ConfirmResult(
+        candidate=candidate,
+        level=alerts.LEVEL_BUY,
+        confirmed_local=36000.0,
+        confirmed_usd=411.0,
+        note="",
+    )
+    text = alerts.render_alert(result, now="2026-08-01T00:00:00Z")
+    assert "за одного взрослого" in text
+    assert "двух мест по ней может не быть" in text

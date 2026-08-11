@@ -341,3 +341,11 @@ def test_format_age_days_plural_forms():
 
 def test_format_age_just_under_a_day_is_still_hours():
     assert digest.format_age("2026-07-31T07:30:00Z", "2026-08-01T06:30:00Z") == "23 часа назад"
+
+
+def test_digest_footer_says_prices_are_per_adult(conn, config_stub):
+    """Цену легко удвоить в уме, а второго места по ней может не быть."""
+    seed(conn, [312.0])
+    summaries = digest.build_all_summaries(conn, config_stub, now="2026-08-01T07:00:00Z")
+    text = digest.render_digest(summaries, config_stub, now="2026-08-01T07:00:00Z")
+    assert "за одного взрослого" in text

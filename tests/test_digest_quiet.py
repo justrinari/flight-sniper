@@ -576,3 +576,10 @@ def test_full_digest_still_shows_the_trends_block(conn, config_stub):
     text = digest.build_digest_text(conn, config_stub, now=NOW, force_full=True)
 
     assert "Тренды" in text
+
+
+def test_quiet_digest_says_prices_are_per_adult(conn, config_stub):
+    quiet_setup(conn)
+    summaries = digest.build_all_summaries(conn, config_stub, now=NOW)
+    text = digest.render_quiet(summaries, config_stub, now=NOW)
+    assert "за одного взрослого" in text

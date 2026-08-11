@@ -176,6 +176,10 @@ def render_alert(result: ConfirmResult, now: str) -> str:
     transfers_text = digest.format_transfers(c.transfers)
     detail = ", ".join(part for part in (airline_name, transfers_text) if part)
     lines.append(f"{detail}  [{html.escape(c.market)}]")
+    # Кэш Aviasales отдаёт цену на одного взрослого и ничего не говорит о том,
+    # сколько мест по ней осталось. Вдвоём тариф может оказаться следующей
+    # ценовой корзиной, а не удвоенной этой.
+    lines.append("цена за одного взрослого — двух мест по ней может не быть")
 
     if c.gate:
         lines.append(f"продавец: {html.escape(c.gate)} — {_GATE_WARNING}")
