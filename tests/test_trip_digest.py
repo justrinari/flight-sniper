@@ -6,7 +6,7 @@ from src.models import PriceRecord
 NOW = "2026-10-22T01:00:00Z"
 
 
-def _record(origin, destination, day, usd, airline="AK", transfers=0, duration=300):
+def _record(origin, destination, day, usd, airline="AK", transfers=0, duration=300, air=None):
     return PriceRecord(
         source="aviasales_cache",
         origin=origin,
@@ -19,6 +19,7 @@ def _record(origin, destination, day, usd, airline="AK", transfers=0, duration=3
         airline=airline,
         transfers=transfers,
         duration_min=duration,
+        duration_to_min=duration if air is None else air,
         search_url=f"https://www.aviasales.ru/search/{origin}{destination}",
         fx_rate=1 / 92,
         landed_usd=usd,
@@ -26,7 +27,7 @@ def _record(origin, destination, day, usd, airline="AK", transfers=0, duration=3
 
 
 BEST = [
-    _record("DPS", "HKT", "2027-01-18", 86, transfers=1, duration=920),
+    _record("DPS", "HKT", "2027-01-18", 86, transfers=1, duration=920, air=285),
     _record("HKT", "SGN", "2027-01-23", 101, airline="VJ", duration=115),
     _record("SGN", "MNL", "2027-01-28", 117, airline="TR", transfers=1),
     _record("MNL", "DPS", "2027-01-31", 102, airline="5J"),
@@ -48,11 +49,14 @@ def test_digest_shows_best_itinerary(conn, trip_config):
     assert result.best_total == 406
     assert "✈️ Бали → Пхукет → Вьетнам → Манила → Бали" in result.text
     assert "1. <b>$406</b> за взрослого" in result.text
-    assert "18.01 Бали → Пхукет — $86 AirAsia, 1 пересадка, в пути 15 ч 20 мин" in result.text
+    assert (
+        "18.01 Бали → Пхукет — $86 AirAsia, 1 пересадка, в пути 15 ч 20 мин,"
+        " из них ожидание 10 ч 35 мин" in result.text
+    )
     assert "23.01 Пхукет → Хошимин — $101 VietJet, без пересадок, в пути 1 ч 55 мин" in result.text
     assert "31.01 Манила → Бали — $102 Cebu Pacific, без пересадок" in result.text
     # 920 + 115 + 300 + 300 минут
-    assert "13 дн. · в самолётах и пересадках 27 ч 15 мин" in result.text
+    assert "13 дн. · в пути всего 27 ч 15 мин, из них ожидание 10 ч 35 мин" in result.text
     assert 'href="https://www.aviasales.ru/search/DPSHKT"' in result.text
     assert trip_digest.DISCLAIMER in result.text
     assert "🚨" not in result.text

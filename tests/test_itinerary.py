@@ -130,3 +130,14 @@ def test_cheapest_legs_keeps_duration_and_itinerary_sums_it():
     assert legs[("DPS", "HKT")][0].duration_min == 920
     result = itinerary.build_itineraries(legs, TRIP)
     assert result[0].travel_minutes == 920 + 300 * 3
+
+
+def test_layover_is_total_minus_air_time():
+    rows = [{**leg.__dict__} for leg in BASE_LEGS]
+    rows[0].update(duration_min=920, duration_to_min=285)
+    legs = itinerary.cheapest_legs(rows)
+    leg = legs[("DPS", "HKT")][0]
+    assert leg.layover_min == 635
+    assert legs[("HKT", "SGN")][0].layover_min == 0
+    result = itinerary.build_itineraries(legs, TRIP)
+    assert result[0].layover_minutes == 635

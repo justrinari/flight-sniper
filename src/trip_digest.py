@@ -91,6 +91,11 @@ def format_duration(minutes: Optional[int]) -> str:
     return f"{hours} ч {rest} мин"
 
 
+def _with_layover(text: str, layover_min: int) -> str:
+    layover = format_duration(layover_min)
+    return f"{text}, из них ожидание {layover}" if layover else text
+
+
 def _day_month(day: str) -> str:
     return date.fromisoformat(day).strftime("%d.%m")
 
@@ -112,7 +117,7 @@ def render_itinerary(
             for part in (
                 carrier,
                 format_transfers(leg.transfers),
-                f"в пути {duration}" if duration else "",
+                _with_layover(f"в пути {duration}", leg.layover_min) if duration else "",
             )
             if part
         )
@@ -123,7 +128,7 @@ def render_itinerary(
     tail = f"   {item.days} дн."
     travel = format_duration(item.travel_minutes)
     if travel:
-        tail += f" · в самолётах и пересадках {travel}"
+        tail += " · " + _with_layover(f"в пути всего {travel}", item.layover_minutes)
     tail += f" · цены {format_age(oldest, now)}"
     links = " ".join(
         f'<a href="{html.escape(leg.search_url, quote=True)}">{index}</a>'

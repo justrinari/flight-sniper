@@ -32,6 +32,18 @@ class Leg:
     last_seen_at: str
     # Время в пути от вылета до прилёта, с пересадками (поле duration кэша).
     duration_min: Optional[int] = None
+    # Время в воздухе (поле duration_to). Документация его не описывает, но на
+    # данных 22.10.2026 у всех прямых рейсов оно равно duration, у всех рейсов
+    # с пересадкой — меньше, и сходится с расписанием сегментов (Scoot
+    # SGN→SIN→MNL: 6 ч в воздухе при 25 ч 45 мин в пути).
+    duration_to_min: Optional[int] = None
+
+    @property
+    def layover_min(self) -> int:
+        """Сколько ждать на пересадках: время в пути минус время в воздухе."""
+        if not self.duration_min or not self.duration_to_min:
+            return 0
+        return max(0, self.duration_min - self.duration_to_min)
 
 
 @dataclass(frozen=True)
@@ -54,6 +66,10 @@ class Itinerary:
     def travel_minutes(self) -> int:
         """Сумма времени в пути всех перелётов (неизвестное считается нулём)."""
         return sum(leg.duration_min or 0 for leg in self.legs)
+
+    @property
+    def layover_minutes(self) -> int:
+        return sum(leg.layover_min for leg in self.legs)
 
 
 def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
@@ -78,6 +94,7 @@ def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
             search_url=row["search_url"] or "",
             last_seen_at=row["last_seen_at"],
             duration_min=row["duration_min"],
+            duration_to_min=row["duration_to_min"],
         )
         key = (leg.origin, leg.destination, leg.depart_date)
         if key not in best or leg.landed_usd < best[key].landed_usd:
