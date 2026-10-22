@@ -28,6 +28,9 @@ ALERT_DROP_RATIO = 0.05  # повторный алерт только при п�
 MAX_ALERTS_PER_RUN = 5
 # Ключ дедупа алертов режима поездки: маршрут один, поэтому и ключ один.
 TRIP_ALERT_KEY = "trip"
+# Дедуп алерта поездки сравнивает только с алертами за последнюю неделю: цена,
+# о которой сообщили, могла пропасть, и без окна она глушила бы алерты навсегда.
+TRIP_ALERT_DEDUP_DAYS = 7
 
 
 class ConfigurationError(RuntimeError):
@@ -56,13 +59,22 @@ def _effective_config(conn, cfg: Config) -> Config:
 def _process_trip_alert(conn, cfg, session, bot_token: str, chat_id: str, now: str) -> int:
     """Алерт, когда лучший маршрут поездки дешевле порога. Возвращает число отправленных."""
     itineraries, _ = trip_digest.load_itineraries(conn, cfg, now)
-    if not itineraries:
+    # Алерт — только по маршруту, все перелёты которого подтвердились в этом же
+    # скане. Свежесть в 3 часа годится для сводки, но для «покупай» перелёт,
+    # пропавший из кэша час назад, означает цену, которой уже нет.
+    confirmed = [
+        item for item in itineraries if all(leg.last_seen_at >= now for leg in item.legs)
+    ]
+    if not confirmed:
         return 0
-    best = itineraries[0]
+    best = confirmed[0]
     threshold = cfg.trip.alert_total_usd
     if best.total_usd >= threshold:
         return 0
-    if not store.should_alert(conn, TRIP_ALERT_KEY, best.total_usd, ALERT_DROP_RATIO):
+    since = store.shift_days(now, -TRIP_ALERT_DEDUP_DAYS)
+    if not store.should_alert(
+        conn, TRIP_ALERT_KEY, best.total_usd, ALERT_DROP_RATIO, since=since
+    ):
         return 0
 
     text = trip_digest.render_alert(best, threshold, now)

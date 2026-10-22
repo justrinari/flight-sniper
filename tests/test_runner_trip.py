@@ -122,3 +122,31 @@ def test_trip_alert_respects_pause(env, trip_config):
 
     assert sent == (0, 0)
     conn.close()
+
+
+@responses.activate
+def test_trip_alert_needs_every_leg_seen_in_this_scan(env, trip_config):
+    conn = _seed(env / "history.sqlite", prices=(80, 90, 100, 100))
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+    later = "2026-10-22T02:00:00Z"
+    # Скан в 02:00 подтвердил только первый перелёт; остальные видны с 01:00.
+    store.insert_prices(
+        conn, [_record("DPS", "HKT", "2027-01-18", 80)], now=later
+    )
+
+    sent = runner._process_alerts(conn, trip_config, requests.Session(), "TP", {}, later)
+
+    assert sent == (0, 0)
+    conn.close()
+
+
+@responses.activate
+def test_trip_alert_dedup_forgets_alerts_older_than_a_week(env, trip_config):
+    conn = _seed(env / "history.sqlite", prices=(80, 90, 100, 100))
+    store.record_alert(conn, "trip", 360.0, sent_at="2026-10-10T00:00:00Z", level="green")
+    responses.add(responses.POST, TG_URL, json={"ok": True}, status=200)
+
+    sent = runner._process_alerts(conn, trip_config, requests.Session(), "TP", {}, NOW)
+
+    assert sent == (1, 0)
+    conn.close()

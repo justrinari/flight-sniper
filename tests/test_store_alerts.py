@@ -94,3 +94,14 @@ def test_alert_stats_counts_by_feedback_within_window(conn):
     store.record_alert(conn, "key4", 270.0, sent_at="2026-08-03T06:00:00Z", level="green")
     stats = store.alert_stats(conn, since="2026-08-01T00:00:00Z")
     assert stats == {"total": 3, "bought": 1, "mismatch": 1, "no_feedback": 1}
+
+
+def test_since_ignores_older_alerts(conn):
+    store.record_alert(conn, "trip", 300.0, sent_at="2026-08-01T06:00:00Z", level="green")
+    assert store.should_alert(conn, "trip", 299.0, drop_ratio=0.05) is False
+    assert (
+        store.should_alert(
+            conn, "trip", 299.0, drop_ratio=0.05, since="2026-08-02T00:00:00Z"
+        )
+        is True
+    )

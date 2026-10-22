@@ -260,18 +260,27 @@ def record_alert(
 
 
 def should_alert(
-    conn: sqlite3.Connection, route_date_key: str, landed_usd: float, drop_ratio: float
+    conn: sqlite3.Connection,
+    route_date_key: str,
+    landed_usd: float,
+    drop_ratio: float,
+    since: Optional[str] = None,
 ) -> bool:
     """Повторный алерт по той же связке — только если цена упала ещё на drop_ratio.
 
     Сравнение идёт с САМЫМ ДЕШЁВЫМ из ранее отправленных алертов по этой связке,
     а не с последним: иначе колебание цены вверх-вниз слало бы алерт на каждом
     отскоке.
+
+    `since` ограничивает сравнение алертами не старше этого момента: иначе
+    один алерт по давно пропавшей цене навсегда глушил бы все следующие.
     """
-    row = conn.execute(
-        "SELECT MIN(landed_usd) AS min_price FROM alerts_sent WHERE route_date_key = ?",
-        (route_date_key,),
-    ).fetchone()
+    sql = "SELECT MIN(landed_usd) AS min_price FROM alerts_sent WHERE route_date_key = ?"
+    params: list[object] = [route_date_key]
+    if since is not None:
+        sql += " AND sent_at >= ?"
+        params.append(since)
+    row = conn.execute(sql, params).fetchone()
     min_price = row["min_price"]
     if min_price is None:
         return True
