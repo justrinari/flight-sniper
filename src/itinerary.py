@@ -9,11 +9,18 @@ max_total_days, каждый следующий перелёт вылетает 
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Iterable, Optional, Sequence
 
 from src.config import TripConfig
+from src.sources import aviasales
+
+# Сколько самых дешёвых вариантов перелёта на одну дату держать. Одного мало:
+# самый дешёвый может прилетать слишком поздно, чтобы уложиться в дни в
+# стране, а чуть более дорогой — подходить.
+OFFERS_PER_DATE = 3
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,9 @@ class Leg:
     # с пересадкой — меньше, и сходится с расписанием сегментов (Scoot
     # SGN→SIN→MNL: 6 ч в воздухе при 25 ч 45 мин в пути).
     duration_to_min: Optional[int] = None
+    # Местное время вылета и прилёта, если его удалось достать из ссылки.
+    depart_at: Optional[datetime] = None
+    arrive_at: Optional[datetime] = None
 
     @property
     def layover_min(self) -> int:
@@ -73,12 +83,13 @@ class Itinerary:
 
 
 def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
-    """Строки price_history → самая дешёвая цена на (откуда, куда, дата).
+    """Строки price_history → несколько самых дешёвых вариантов на (откуда, куда, дата).
 
-    Строки без landed_usd (не нашёлся курс) пропускаются. Перелёты каждой
-    пары отсортированы по дате.
+    Один и тот же рейс из разных рынков считается одним вариантом (по
+    перевозчику и времени). Строки без landed_usd (не нашёлся курс)
+    пропускаются. Перелёты каждой пары отсортированы по дате, затем по цене.
     """
-    best: dict[tuple[str, str, str], Leg] = {}
+    offers: dict[tuple, Leg] = {}
     for row in rows:
         if row["landed_usd"] is None:
             continue
@@ -96,14 +107,38 @@ def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
             duration_min=row["duration_min"],
             duration_to_min=row["duration_to_min"],
         )
-        key = (leg.origin, leg.destination, leg.depart_date)
-        if key not in best or leg.landed_usd < best[key].landed_usd:
-            best[key] = leg
+        times = aviasales.ticket_times(leg.search_url)
+        if times and times[0].date().isoformat() == leg.depart_date:
+            leg = dataclasses.replace(leg, depart_at=times[0], arrive_at=times[1])
+        if leg.depart_at is not None:
+            key = (leg.origin, leg.destination, leg.airline, leg.transfers, leg.depart_at, leg.arrive_at)
+        else:
+            key = (id(row),)
+        if key not in offers or leg.landed_usd < offers[key].landed_usd:
+            offers[key] = leg
+
+    per_date: dict[tuple[str, str, str], list[Leg]] = {}
+    for leg in sorted(offers.values(), key=lambda item: item.landed_usd):
+        bucket = per_date.setdefault((leg.origin, leg.destination, leg.depart_date), [])
+        if len(bucket) < OFFERS_PER_DATE:
+            bucket.append(leg)
 
     grouped: dict[tuple[str, str], list[Leg]] = {}
-    for leg in sorted(best.values(), key=lambda item: item.depart_date):
-        grouped.setdefault((leg.origin, leg.destination), []).append(leg)
+    for (origin, destination, _), bucket in sorted(per_date.items(), key=lambda item: item[0][2]):
+        grouped.setdefault((origin, destination), []).extend(bucket)
     return grouped
+
+
+def _long_enough_stay(arrived: Leg, leaving: Leg, date_gap: timedelta, min_days: int) -> bool:
+    """Хватает ли дней в стране между прилётом одного перелёта и вылетом следующего.
+
+    Если известно время, считаются полные сутки от прилёта до вылета: рейс,
+    прилетевший 29.01 вечером, и вылет 31.01 ночью — это 1 сутки 9 часов, а
+    не «3 дня» по датам вылета. Без времени — по датам вылета, как раньше.
+    """
+    if arrived.arrive_at is not None and leaving.depart_at is not None:
+        return leaving.depart_at - arrived.arrive_at >= timedelta(days=min_days)
+    return date_gap.days >= min_days
 
 
 def build_itineraries(
@@ -133,7 +168,7 @@ def build_itineraries(
                     if trip.earliest_start and leg.depart_date < trip.earliest_start:
                         continue
                 else:
-                    if (day - previous).days < trip.min_stay_days:
+                    if not _long_enough_stay(chosen[-1], leg, day - previous, trip.min_stay_days):
                         continue
                     if (day - start).days > trip.max_total_days:
                         continue

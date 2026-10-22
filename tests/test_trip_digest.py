@@ -136,3 +136,19 @@ def test_transfer_points_are_named(conn, trip_config):
     text = trip_digest.build_text(conn, trip_config, now=NOW).text
     assert "— $86 AirAsia, пересадка: Куала-Лумпур, в пути 15 ч 20 мин" in text
     assert "пересадка: Бангкок, смена аэропорта BKK → DMK" in text
+
+
+def test_leg_shows_departure_and_arrival_time(conn, trip_config):
+    records = list(BEST)
+    records[0] = dataclasses.replace(
+        records[0],
+        search_url="https://www.aviasales.kg/search/DPS1801HKT1?t=AK18002928001800344400000920DPSKULHKT_7ae2&x=1",
+    )
+    records[1] = dataclasses.replace(
+        records[1],
+        search_url="https://www.aviasales.kg/search/HKT2301SGN1?t=VJ18007134001800720300000115HKTSGN_8edf&x=1",
+    )
+    store.insert_prices(conn, records, now=NOW)
+    text = trip_digest.build_text(conn, trip_config, now=NOW).text
+    assert "   18.01 17:20 → 19.01 07:40 Бали → Пхукет — $86" in text
+    assert "   23.01 14:10 → 16:05 Пхукет → Хошимин — $101" in text

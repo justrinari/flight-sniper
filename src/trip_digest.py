@@ -112,6 +112,14 @@ def _with_layover(text: str, layover_min: int) -> str:
     return f"{text}, из них ожидание {layover}" if layover else text
 
 
+def _when(leg: Leg) -> str:
+    """'18.01 17:20 → 19.01 07:40', '23.01 14:10 → 16:05' или просто '18.01'."""
+    if leg.depart_at is None or leg.arrive_at is None:
+        return _day_month(leg.depart_date)
+    arrive_format = "%H:%M" if leg.arrive_at.date() == leg.depart_at.date() else "%d.%m %H:%M"
+    return f"{leg.depart_at:%d.%m %H:%M} → {leg.arrive_at.strftime(arrive_format)}"
+
+
 def _day_month(day: str) -> str:
     return date.fromisoformat(day).strftime("%d.%m")
 
@@ -138,7 +146,7 @@ def render_itinerary(
             if part
         )
         lines.append(
-            f"   {_day_month(leg.depart_date)} {route} — ${leg.landed_usd:.0f} {detail}"
+            f"   {_when(leg)} {route} — ${leg.landed_usd:.0f} {detail}"
         )
     oldest = min(leg.last_seen_at for leg in item.legs)
     tail = f"   {item.days} дн."

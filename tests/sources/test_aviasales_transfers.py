@@ -41,3 +41,23 @@ def test_unparseable_link_gives_none():
     assert aviasales.transfer_points("", transfers=1) is None
     # Число аэропортов не сходится с числом пересадок.
     assert aviasales.transfer_points(_link("DPSKULHKT"), transfers=2) is None
+
+
+def test_ticket_times_are_local_departure_and_arrival():
+    from datetime import datetime
+
+    link = "https://www.aviasales.kg/search/SGN2801MNL1?t=TR18011511001801247400001545SGNSINMNL_db1f_9704&x=1"
+    assert aviasales.ticket_times(link) == (
+        datetime(2027, 1, 28, 15, 45),
+        datetime(2027, 1, 29, 18, 30),
+    )
+    five_j = "https://www.aviasales.kg/search/MNL3101DPS1?t=5J18013671001801381800000245MNLDPS_1cc3_8391&x=1"
+    assert aviasales.ticket_times(five_j) == (
+        datetime(2027, 1, 31, 3, 45),
+        datetime(2027, 1, 31, 7, 50),
+    )
+
+
+def test_ticket_times_unparseable_gives_none():
+    assert aviasales.ticket_times("https://www.aviasales.ru/search/x") is None
+    assert aviasales.ticket_times("") is None

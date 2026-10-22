@@ -11,7 +11,7 @@ TRIP = TripConfig(
 )
 
 
-def _leg(origin, destination, day, usd, airline="AK"):
+def _leg(origin, destination, day, usd, airline="AK", depart_at=None, arrive_at=None):
     return Leg(
         origin=origin,
         destination=destination,
@@ -24,6 +24,8 @@ def _leg(origin, destination, day, usd, airline="AK"):
         search_url=f"https://www.aviasales.ru/search/{origin}{destination}",
         last_seen_at="2026-10-22T00:00:00Z",
         duration_min=300,
+        depart_at=depart_at,
+        arrive_at=arrive_at,
     )
 
 
@@ -84,7 +86,7 @@ def test_itineraries_are_sorted_by_total():
     assert [r.total_usd for r in result] == [406, 468]
 
 
-def test_cheapest_legs_keeps_minimum_per_date_and_sorts_by_date():
+def test_cheapest_legs_skips_unpriced_rows_and_sorts_by_date_then_price():
     rows = [
         {**_leg("DPS", "HKT", "2027-01-20", 90).__dict__},
         {**_leg("DPS", "HKT", "2027-01-18", 95).__dict__},
@@ -95,6 +97,7 @@ def test_cheapest_legs_keeps_minimum_per_date_and_sorts_by_date():
     legs = grouped[("DPS", "HKT")]
     assert [(leg.depart_date, leg.landed_usd, leg.airline) for leg in legs] == [
         ("2027-01-18", 86, "FD"),
+        ("2027-01-18", 95, "AK"),
         ("2027-01-20", 90, "AK"),
     ]
 
@@ -141,3 +144,38 @@ def test_layover_is_total_minus_air_time():
     assert legs[("HKT", "SGN")][0].layover_min == 0
     result = itinerary.build_itineraries(legs, TRIP)
     assert result[0].layover_minutes == 635
+
+
+def _at(text):
+    from datetime import datetime
+
+    return datetime.fromisoformat(text)
+
+
+def test_stay_is_counted_from_arrival_not_departure_date():
+    # Вылет 28.01 днём, прилёт в Манилу 29.01 вечером, дальше — 31.01 ночью:
+    # по датам вылета это 3 дня, на деле в стране 1 сутки 9 часов.
+    late = _leg("SGN", "MNL", "2027-01-28", 117,
+                depart_at=_at("2027-01-28T15:45"), arrive_at=_at("2027-01-29T18:30"))
+    red_eye = _leg("MNL", "DPS", "2027-01-31", 102,
+                   depart_at=_at("2027-01-31T03:45"), arrive_at=_at("2027-01-31T07:50"))
+    legs = BASE_LEGS[:2] + (late, red_eye)
+    assert itinerary.build_itineraries(_group(*legs), TRIP) == []
+
+
+def test_stay_of_full_days_after_arrival_is_accepted():
+    late = _leg("SGN", "MNL", "2027-01-28", 117,
+                depart_at=_at("2027-01-28T15:45"), arrive_at=_at("2027-01-29T18:30"))
+    later = _leg("MNL", "DPS", "2027-02-01", 102,
+                 depart_at=_at("2027-02-01T20:00"), arrive_at=_at("2027-02-02T00:05"))
+    legs = BASE_LEGS[:2] + (late, later)
+    assert len(itinerary.build_itineraries(_group(*legs), TRIP)) == 1
+
+
+def test_cheapest_legs_keeps_a_few_offers_per_date():
+    rows = [
+        {**_leg("DPS", "HKT", "2027-01-18", usd).__dict__}
+        for usd in (99, 86, 95, 90)
+    ]
+    legs = itinerary.cheapest_legs(rows)[("DPS", "HKT")]
+    assert [leg.landed_usd for leg in legs] == [86, 90, 95]

@@ -245,6 +245,29 @@ def fetch_prices_for_dates(
 _CHAIN_RE = re.compile(r"\d([A-Z]{6,})_")
 
 
+# Начало того же параметра t: коды перевозчиков, затем вылет и прилёт —
+# десятизначные «unix-метки», которые на деле хранят местное время аэропортов
+# (сверено с сайтом 22.10.2026: SGN→MNL Scoot 15:45 → 18:30 следующего дня).
+_TIMES_RE = re.compile(r"^(?:[A-Z0-9]{2})+?(\d{10})(\d{10})\d{6}[A-Z]{6,}_")
+
+
+def ticket_times(link: str) -> Optional[tuple[datetime, datetime]]:
+    """Местное время вылета и прилёта из ссылки на билет, без часового пояса."""
+    values = parse_qs(urlparse(link or "").query).get("t")
+    if not values:
+        return None
+    match = _TIMES_RE.match(values[0])
+    if not match:
+        return None
+    depart, arrive = (
+        datetime.fromtimestamp(int(value), timezone.utc).replace(tzinfo=None)
+        for value in match.groups()
+    )
+    if arrive < depart:
+        return None
+    return depart, arrive
+
+
 def transfer_points(link: str, transfers: int) -> Optional[list[tuple[str, str]]]:
     """Аэропорты пересадок из ссылки на билет: по паре (прилёт, вылет) на пересадку.
 
