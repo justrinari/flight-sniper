@@ -79,6 +79,18 @@ def missing_stages(legs: dict[tuple[str, str], list[Leg]], trip) -> list[str]:
     return missing
 
 
+def format_duration(minutes: Optional[int]) -> str:
+    """920 → '15 ч 20 мин'. Пусто, если длительность неизвестна."""
+    if not minutes:
+        return ""
+    hours, rest = divmod(int(minutes), 60)
+    if not hours:
+        return f"{rest} мин"
+    if not rest:
+        return f"{hours} ч"
+    return f"{hours} ч {rest} мин"
+
+
 def _day_month(day: str) -> str:
     return date.fromisoformat(day).strftime("%d.%m")
 
@@ -94,14 +106,25 @@ def render_itinerary(
     for leg in item.legs:
         route = html.escape(cities.route(leg.origin, leg.destination))
         carrier = html.escape(airlines.name(leg.airline))
+        duration = format_duration(leg.duration_min)
         detail = ", ".join(
-            part for part in (carrier, format_transfers(leg.transfers)) if part
+            part
+            for part in (
+                carrier,
+                format_transfers(leg.transfers),
+                f"в пути {duration}" if duration else "",
+            )
+            if part
         )
         lines.append(
             f"   {_day_month(leg.depart_date)} {route} — ${leg.landed_usd:.0f} {detail}"
         )
     oldest = min(leg.last_seen_at for leg in item.legs)
-    tail = f"   {item.days} дн. · цены {format_age(oldest, now)}"
+    tail = f"   {item.days} дн."
+    travel = format_duration(item.travel_minutes)
+    if travel:
+        tail += f" · в самолётах и пересадках {travel}"
+    tail += f" · цены {format_age(oldest, now)}"
     links = " ".join(
         f'<a href="{html.escape(leg.search_url, quote=True)}">{index}</a>'
         for index, leg in enumerate(item.legs, start=1)

@@ -23,6 +23,7 @@ def _leg(origin, destination, day, usd, airline="AK"):
         currency="rub",
         search_url=f"https://www.aviasales.ru/search/{origin}{destination}",
         last_seen_at="2026-10-22T00:00:00Z",
+        duration_min=300,
     )
 
 
@@ -120,3 +121,12 @@ def test_start_before_earliest_start_is_rejected():
     assert itinerary.build_itineraries(_group(*BASE_LEGS), trip) == []
     trip = dataclasses.replace(TRIP, earliest_start="2027-01-18")
     assert len(itinerary.build_itineraries(_group(*BASE_LEGS), trip)) == 1
+
+
+def test_cheapest_legs_keeps_duration_and_itinerary_sums_it():
+    rows = [{**leg.__dict__} for leg in BASE_LEGS]
+    rows[0]["duration_min"] = 920
+    legs = itinerary.cheapest_legs(rows)
+    assert legs[("DPS", "HKT")][0].duration_min == 920
+    result = itinerary.build_itineraries(legs, TRIP)
+    assert result[0].travel_minutes == 920 + 300 * 3

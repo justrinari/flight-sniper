@@ -6,7 +6,7 @@ from src.models import PriceRecord
 NOW = "2026-10-22T01:00:00Z"
 
 
-def _record(origin, destination, day, usd, airline="AK", transfers=0):
+def _record(origin, destination, day, usd, airline="AK", transfers=0, duration=300):
     return PriceRecord(
         source="aviasales_cache",
         origin=origin,
@@ -18,7 +18,7 @@ def _record(origin, destination, day, usd, airline="AK", transfers=0):
         currency="rub",
         airline=airline,
         transfers=transfers,
-        duration_min=300,
+        duration_min=duration,
         search_url=f"https://www.aviasales.ru/search/{origin}{destination}",
         fx_rate=1 / 92,
         landed_usd=usd,
@@ -26,8 +26,8 @@ def _record(origin, destination, day, usd, airline="AK", transfers=0):
 
 
 BEST = [
-    _record("DPS", "HKT", "2027-01-18", 86, transfers=1),
-    _record("HKT", "SGN", "2027-01-23", 101, airline="VJ"),
+    _record("DPS", "HKT", "2027-01-18", 86, transfers=1, duration=920),
+    _record("HKT", "SGN", "2027-01-23", 101, airline="VJ", duration=115),
     _record("SGN", "MNL", "2027-01-28", 117, airline="TR", transfers=1),
     _record("MNL", "DPS", "2027-01-31", 102, airline="5J"),
 ]
@@ -48,10 +48,11 @@ def test_digest_shows_best_itinerary(conn, trip_config):
     assert result.best_total == 406
     assert "✈️ Бали → Пхукет → Вьетнам → Манила → Бали" in result.text
     assert "1. <b>$406</b> за взрослого" in result.text
-    assert "18.01 Бали → Пхукет — $86 AirAsia, 1 пересадка" in result.text
-    assert "23.01 Пхукет → Хошимин — $101 VietJet, без пересадок" in result.text
+    assert "18.01 Бали → Пхукет — $86 AirAsia, 1 пересадка, в пути 15 ч 20 мин" in result.text
+    assert "23.01 Пхукет → Хошимин — $101 VietJet, без пересадок, в пути 1 ч 55 мин" in result.text
     assert "31.01 Манила → Бали — $102 Cebu Pacific, без пересадок" in result.text
-    assert "13 дн." in result.text
+    # 920 + 115 + 300 + 300 минут
+    assert "13 дн. · в самолётах и пересадках 27 ч 15 мин" in result.text
     assert 'href="https://www.aviasales.ru/search/DPSHKT"' in result.text
     assert trip_digest.DISCLAIMER in result.text
     assert "🚨" not in result.text
@@ -103,4 +104,12 @@ def test_missing_transfers_leave_no_dangling_comma(conn, trip_config):
     records[1] = _record("HKT", "SGN", "2027-01-23", 101, airline="VJ", transfers=None)
     store.insert_prices(conn, records, now=NOW)
     text = trip_digest.build_text(conn, trip_config, now=NOW).text
-    assert "23.01 Пхукет → Хошимин — $101 VietJet\n" in text
+    assert "23.01 Пхукет → Хошимин — $101 VietJet, в пути 5 ч\n" in text
+
+
+@pytest.mark.parametrize(
+    "minutes, expected",
+    [(45, "45 мин"), (60, "1 ч"), (115, "1 ч 55 мин"), (920, "15 ч 20 мин"), (0, ""), (None, "")],
+)
+def test_format_duration(minutes, expected):
+    assert trip_digest.format_duration(minutes) == expected

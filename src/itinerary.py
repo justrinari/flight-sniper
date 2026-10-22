@@ -30,6 +30,8 @@ class Leg:
     currency: str
     search_url: str
     last_seen_at: str
+    # Время в пути от вылета до прилёта, с пересадками (поле duration кэша).
+    duration_min: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,11 @@ class Itinerary:
         first = date.fromisoformat(self.legs[0].depart_date)
         last = date.fromisoformat(self.legs[-1].depart_date)
         return (last - first).days
+
+    @property
+    def travel_minutes(self) -> int:
+        """Сумма времени в пути всех перелётов (неизвестное считается нулём)."""
+        return sum(leg.duration_min or 0 for leg in self.legs)
 
 
 def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
@@ -70,6 +77,7 @@ def cheapest_legs(rows: Iterable) -> dict[tuple[str, str], list[Leg]]:
             currency=row["currency"],
             search_url=row["search_url"] or "",
             last_seen_at=row["last_seen_at"],
+            duration_min=row["duration_min"],
         )
         key = (leg.origin, leg.destination, leg.depart_date)
         if key not in best or leg.landed_usd < best[key].landed_usd:
