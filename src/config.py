@@ -10,8 +10,9 @@ from __future__ import annotations
 import dataclasses
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 
@@ -40,6 +41,68 @@ OVERRIDABLE: dict[str, Any] = {
     "min_offer_lifetime_minutes": float,
     "extra_routes": lambda value: [tuple(pair) for pair in json.loads(value)],
 }
+
+
+@dataclass(frozen=True)
+class TripConfig:
+    """Поездка из нескольких перелётов.
+
+    `stops` — остановки по порядку, в каждой — альтернативные аэропорты.
+    Бот следит за всеми парами соседних остановок и сам выбирает, через какие
+    города маршрут дешевле.
+    """
+
+    stops: tuple[tuple[str, ...], ...]
+    latest_start: str  # YYYY-MM-DD, вылет первого перелёта не позже
+    max_total_days: int  # от вылета первого до вылета последнего перелёта
+    min_stay_days: int  # минимум дней между соседними перелётами
+    alert_total_usd: float
+    top_n: int = 3
+
+    @classmethod
+    def parse(cls, raw: dict) -> "TripConfig":
+        stops_raw = raw.get("stops") or []
+        if len(stops_raw) < 2:
+            raise ValueError("config.yaml: trip.stops — нужно минимум две остановки")
+        stops = []
+        for index, stop in enumerate(stops_raw):
+            items = stop if isinstance(stop, list) else [stop]
+            codes = tuple(str(code).strip().upper() for code in items)
+            if not codes or any(not code for code in codes):
+                raise ValueError(f"config.yaml: trip.stops[{index}] пустая")
+            stops.append(codes)
+
+        latest_start = str(raw.get("latest_start", ""))
+        try:
+            date.fromisoformat(latest_start)
+        except ValueError as exc:
+            raise ValueError(
+                f"config.yaml: trip.latest_start должна быть датой YYYY-MM-DD, а не {latest_start!r}"
+            ) from exc
+
+        min_stay_days = int(raw.get("min_stay_days", 1))
+        if min_stay_days < 1:
+            raise ValueError("config.yaml: trip.min_stay_days должно быть не меньше 1")
+
+        return cls(
+            stops=tuple(stops),
+            latest_start=latest_start,
+            max_total_days=int(raw["max_total_days"]),
+            min_stay_days=min_stay_days,
+            alert_total_usd=float(raw["alert_total_usd"]),
+            top_n=int(raw.get("top_n", 3)),
+        )
+
+    def pairs(self) -> list[tuple[str, str]]:
+        """Все пары аэропортов соседних остановок, в порядке маршрута."""
+        result: list[tuple[str, str]] = []
+        for current, following in zip(self.stops, self.stops[1:]):
+            for origin in current:
+                for destination in following:
+                    pair = (origin, destination)
+                    if origin != destination and pair not in result:
+                        result.append(pair)
+        return result
 
 
 @dataclass(frozen=True)
@@ -76,6 +139,9 @@ class Config:
     # Порог BUY по конкретному маршруту, ключ "ORIGIN-DESTINATION". Общий
     # abs_threshold_usd — фон для маршрутов, которых здесь нет.
     route_thresholds_usd: dict[str, float] = dataclasses.field(default_factory=dict)
+    # Режим поездки из нескольких перелётов. Если задан, маршруты берутся из
+    # остановок поездки, а origins/destinations не используются.
+    trip: Optional[TripConfig] = None
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -122,10 +188,15 @@ class Config:
                 str(k): float(v)
                 for k, v in (raw.get("route_thresholds_usd") or {}).items()
             },
+            trip=TripConfig.parse(raw["trip"]) if raw.get("trip") else None,
         )
 
     def routes(self) -> list[tuple[str, str]]:
-        base = [(o, d) for o in self.origins for d in self.destinations]
+        base = (
+            self.trip.pairs()
+            if self.trip is not None
+            else [(o, d) for o in self.origins for d in self.destinations]
+        )
         for pair in self.extra_routes:
             route = tuple(pair)
             if route not in base:
