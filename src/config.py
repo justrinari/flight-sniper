@@ -58,6 +58,7 @@ class TripConfig:
     min_stay_days: int  # минимум дней между соседними перелётами
     alert_total_usd: float
     top_n: int = 3
+    earliest_start: Optional[str] = None  # YYYY-MM-DD, вылет первого перелёта не раньше
 
     @classmethod
     def parse(cls, raw: dict) -> "TripConfig":
@@ -80,6 +81,18 @@ class TripConfig:
                 f"config.yaml: trip.latest_start должна быть датой YYYY-MM-DD, а не {latest_start!r}"
             ) from exc
 
+        earliest_start = raw.get("earliest_start")
+        if earliest_start is not None:
+            earliest_start = str(earliest_start)
+            try:
+                date.fromisoformat(earliest_start)
+            except ValueError as exc:
+                raise ValueError(
+                    f"config.yaml: trip.earliest_start должна быть датой YYYY-MM-DD, а не {earliest_start!r}"
+                ) from exc
+            if earliest_start > latest_start:
+                raise ValueError("config.yaml: trip.earliest_start позже trip.latest_start")
+
         min_stay_days = int(raw.get("min_stay_days", 1))
         if min_stay_days < 1:
             raise ValueError("config.yaml: trip.min_stay_days должно быть не меньше 1")
@@ -91,6 +104,7 @@ class TripConfig:
             min_stay_days=min_stay_days,
             alert_total_usd=float(raw["alert_total_usd"]),
             top_n=int(raw.get("top_n", 3)),
+            earliest_start=earliest_start,
         )
 
     def pairs(self) -> list[tuple[str, str]]:

@@ -106,6 +106,12 @@ def render_itinerary(
     return lines
 
 
+def _departure_window(trip) -> str:
+    if trip.earliest_start:
+        return f"{_day_month(trip.earliest_start)}–{_day_month(trip.latest_start)}"
+    return f"до {_day_month(trip.latest_start)}"
+
+
 def build_text(conn: sqlite3.Connection, cfg, now: str) -> DigestResult:
     trip = cfg.trip
     lines: list[str] = []
@@ -115,7 +121,7 @@ def build_text(conn: sqlite3.Connection, cfg, now: str) -> DigestResult:
 
     lines.append("✈️ " + html.escape(" → ".join(stage_label(stop) for stop in trip.stops)))
     lines.append(
-        f"Вылет до {_day_month(trip.latest_start)} · до {trip.max_total_days} дней · "
+        f"Вылет {_departure_window(trip)} · до {trip.max_total_days} дней · "
         f"от {trip.min_stay_days} дн. в стране"
     )
 

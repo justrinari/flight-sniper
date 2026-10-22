@@ -105,6 +105,8 @@ def build_itineraries(
                 if previous is None:
                     if leg.depart_date > trip.latest_start:
                         continue
+                    if trip.earliest_start and leg.depart_date < trip.earliest_start:
+                        continue
                 else:
                     if (day - previous).days < trip.min_stay_days:
                         continue

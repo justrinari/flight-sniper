@@ -73,6 +73,7 @@ trip:
     - [SGN, HAN, DAD, PQC, CXR]
     - [MNL, CEB, MPH]
     - [DPS]
+  earliest_start: "2027-01-15"
   latest_start: "2027-01-22"
   max_total_days: 14
   min_stay_days: 3

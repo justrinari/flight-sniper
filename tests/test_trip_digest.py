@@ -86,3 +86,13 @@ def test_alert_text(conn, trip_config):
     text = trip_digest.render_alert(itineraries[0], 450, NOW)
     assert text.startswith("🟢 Маршрут дешевле $450")
     assert "1. <b>$406</b> за взрослого" in text
+
+
+def test_header_shows_departure_window(conn, trip_config):
+    import dataclasses
+
+    cfg = dataclasses.replace(
+        trip_config, trip=dataclasses.replace(trip_config.trip, earliest_start="2027-01-15")
+    )
+    result = trip_digest.build_text(conn, cfg, now=NOW)
+    assert "Вылет 15.01–22.01" in result.text

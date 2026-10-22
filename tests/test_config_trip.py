@@ -104,3 +104,15 @@ def test_min_stay_below_one_is_rejected(tmp_path):
 def test_bad_latest_start_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="latest_start"):
         _load(tmp_path, BASE + TRIP.replace('"2027-01-22"', '"22.01.2027"'))
+
+
+def test_earliest_start_is_optional_and_parsed(tmp_path):
+    assert _load(tmp_path, BASE + TRIP).trip.earliest_start is None
+    text = BASE + TRIP + '  earliest_start: "2027-01-15"\n'
+    assert _load(tmp_path, text).trip.earliest_start == "2027-01-15"
+
+
+def test_earliest_start_after_latest_start_is_rejected(tmp_path):
+    text = BASE + TRIP + '  earliest_start: "2027-01-23"\n'
+    with pytest.raises(ValueError, match="earliest_start"):
+        _load(tmp_path, text)

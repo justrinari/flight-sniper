@@ -111,3 +111,12 @@ def test_top_distinct_skips_same_city_set():
         ("HKT", "DAD", "MNL", "DPS"),
     ]
     assert top[0].total_usd == 406
+
+
+def test_start_before_earliest_start_is_rejected():
+    import dataclasses
+
+    trip = dataclasses.replace(TRIP, earliest_start="2027-01-19")
+    assert itinerary.build_itineraries(_group(*BASE_LEGS), trip) == []
+    trip = dataclasses.replace(TRIP, earliest_start="2027-01-18")
+    assert len(itinerary.build_itineraries(_group(*BASE_LEGS), trip)) == 1
