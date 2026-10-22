@@ -1,6 +1,8 @@
+import dataclasses
+
 import pytest
 
-from src.config import Config
+from src.config import Config, TripConfig
 
 
 @pytest.fixture()
@@ -31,4 +33,24 @@ def config_stub() -> Config:
         # те тесты, которые его и проверяют — см. test_rules_vanished.py,
         # test_store_prices.py и «фантомы» в test_rules_anomaly.py.
         min_offer_lifetime_minutes=0.0,
+    )
+
+
+@pytest.fixture()
+def trip_config(config_stub) -> Config:
+    """Режим поездки Бали → Пхукет → Вьетнам → Филиппины → Бали в миниатюре."""
+    return dataclasses.replace(
+        config_stub,
+        origins=[],
+        destinations=[],
+        trip_type="one_way",
+        departure_months=["2027-01", "2027-02"],
+        timezone="Asia/Makassar",
+        trip=TripConfig(
+            stops=(("DPS",), ("HKT",), ("SGN", "DAD"), ("MNL",), ("DPS",)),
+            latest_start="2027-01-22",
+            max_total_days=14,
+            min_stay_days=3,
+            alert_total_usd=380.0,
+        ),
     )
