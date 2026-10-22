@@ -27,6 +27,9 @@ jobs:
       - name: Send digest
         run: python monitor.py digest
         env:
+          # Нужен для освежения цен лучшего маршрута перед отправкой; без него
+          # run_digest пропускает освежение и шлёт цены до 3 часов давности.
+          TP_TOKEN: ${{ secrets.TP_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       - name: Persist database
