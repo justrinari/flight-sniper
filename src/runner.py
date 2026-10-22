@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from src import alerts, commands, digest, fx, notify, rules, store
+from src import alerts, commands, digest, fx, notify, rules, store, trip_digest
 from src.config import Config
 from src.sources import aviasales
 
@@ -26,6 +26,8 @@ ALERT_DROP_RATIO = 0.05  # повторный алерт только при п�
 # десятками сообщений подряд и таким же числом запросов подтверждения.
 # Отрезается хвост: кандидаты отсортированы по цене, уходят самые дешёвые.
 MAX_ALERTS_PER_RUN = 5
+# Ключ дедупа алертов режима поездки: маршрут один, поэтому и ключ один.
+TRIP_ALERT_KEY = "trip"
 
 
 class ConfigurationError(RuntimeError):
@@ -51,6 +53,28 @@ def _effective_config(conn, cfg: Config) -> Config:
     return cfg.with_overrides(store.all_meta(conn))
 
 
+def _process_trip_alert(conn, cfg, session, bot_token: str, chat_id: str, now: str) -> int:
+    """Алерт, когда лучший маршрут поездки дешевле порога. Возвращает число отправленных."""
+    itineraries, _ = trip_digest.load_itineraries(conn, cfg, now)
+    if not itineraries:
+        return 0
+    best = itineraries[0]
+    threshold = cfg.trip.alert_total_usd
+    if best.total_usd >= threshold:
+        return 0
+    if not store.should_alert(conn, TRIP_ALERT_KEY, best.total_usd, ALERT_DROP_RATIO):
+        return 0
+
+    text = trip_digest.render_alert(best, threshold, now)
+    try:
+        notify.send_message(session, bot_token, chat_id, text)
+    except notify.TelegramError as exc:
+        LOG.warning("не удалось отправить алерт поездки: %s", exc)
+        return 0
+    store.record_alert(conn, TRIP_ALERT_KEY, best.total_usd, now, rules.GREEN)
+    return 1
+
+
 def _process_alerts(conn, cfg, session, token, rates, now: str) -> tuple[int, int]:
     """Ищет аномалии, подтверждает их и шлёт алерты.
 
@@ -64,6 +88,10 @@ def _process_alerts(conn, cfg, session, token, rates, now: str) -> tuple[int, in
     if not bot_token or not chat_id:
         LOG.warning("TG_BOT_TOKEN/TG_CHAT_ID не заданы — алерты пропущены")
         return 0, 0
+
+    if cfg.trip is not None:
+        # Алерты по 30 отдельным перелётам бессмысленны: важна сумма маршрута.
+        return _process_trip_alert(conn, cfg, session, bot_token, chat_id, now), 0
 
     candidates = rules.find_candidates(conn, cfg, now)
     allowed, skipped = candidates[:MAX_ALERTS_PER_RUN], candidates[MAX_ALERTS_PER_RUN:]
@@ -215,6 +243,44 @@ def _refresh_best_prices(conn, cfg, session, token, rates, now: str) -> int:
     return inserted
 
 
+def _refresh_trip_legs(conn, cfg, session, token, rates, now: str) -> int:
+    """Перепроверяет каждый перелёт лучшего маршрута точечным запросом.
+
+    Та же идея, что в _refresh_best_prices: цифра в утренней сводке должна
+    быть настоящей. Четыре запроса в сутки. Ошибки не фатальны.
+    """
+    itineraries, _ = trip_digest.load_itineraries(conn, cfg, now)
+    if not itineraries:
+        return 0
+    inserted = 0
+    for leg in itineraries[0].legs:
+        try:
+            records = aviasales.fetch_prices_for_dates(
+                session,
+                token,
+                origin=leg.origin,
+                destination=leg.destination,
+                market=leg.market,
+                currency=leg.currency,
+                departure_at=leg.depart_date,
+                return_at=None,
+                one_way=True,
+                limit=30,
+            )
+        except aviasales.AviasalesError as exc:
+            LOG.warning(
+                "освежение перелёта %s->%s %s не удалось: %s",
+                leg.origin,
+                leg.destination,
+                leg.depart_date,
+                exc,
+            )
+            continue
+        enriched = fx.enrich(aviasales.filter_records(records, cfg), rates, cfg)
+        inserted += store.insert_prices(conn, enriched, now=now)
+    return inserted
+
+
 def run_digest(
     cfg: Config, db_path: Path = DEFAULT_DB, now: Optional[str] = None, session=None
 ) -> dict:
@@ -232,9 +298,18 @@ def run_digest(
     except (ConfigurationError, fx.FxError) as exc:
         LOG.warning("освежение лучших цен перед сводкой пропущено: %s", exc)
     else:
-        refreshed = _refresh_best_prices(conn, cfg, session, token, rates, now)
+        refresh = _refresh_trip_legs if cfg.trip is not None else _refresh_best_prices
+        refreshed = refresh(conn, cfg, session, token, rates, now)
 
     routes = len(cfg.routes())
+    if cfg.trip is not None:
+        result = trip_digest.build_text(conn, cfg, now=now)
+        notify.send_message(session, bot_token, chat_id, result.text)
+        if result.best_total is not None:
+            store.set_meta(conn, trip_digest.PREV_KEY, f"{result.best_total:.2f}")
+        conn.close()
+        return {"sent": True, "routes": routes, "refreshed": refreshed}
+
     text = digest.build_digest_text(conn, cfg, now=now)
     conn.close()
 
