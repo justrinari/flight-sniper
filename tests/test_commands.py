@@ -312,3 +312,22 @@ def test_mismatch_sets_feedback(db, config_stub):
 def test_unknown_command_suggests_help(db, config_stub):
     text = commands.handle(db, config_stub, "/frobnicate", [], now="x")
     assert "/help" in text
+
+
+def test_now_in_trip_mode_sends_trip_digest(db, trip_config):
+    text = commands.handle(db, trip_config, "/now", [], now="2026-10-22T01:00:00Z")
+    assert "✈️ Бали → Пхукет → Вьетнам → Манила → Бали" in text
+    assert store.get_meta(db, "trip_best_prev") is None
+
+
+def test_threshold_in_trip_mode_points_to_config(db, trip_config):
+    text = commands.handle(db, trip_config, "/threshold", ["350"], now="x")
+    assert "$380" in text
+    assert "trip.alert_total_usd" in text
+    assert store.get_meta(db, "abs_threshold_usd") is None
+
+
+def test_status_in_trip_mode_shows_trip_threshold(db, trip_config):
+    text = commands.handle(db, trip_config, "/status", [], now="2026-10-22T01:00:00Z")
+    assert "Порог алерта маршрута: $380" in text
+    assert "Бали → Пхукет → Вьетнам → Манила → Бали" in text

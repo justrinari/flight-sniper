@@ -61,7 +61,7 @@ def test_digest_compares_with_previous_best(conn, trip_config):
     store.insert_prices(conn, BEST, now=NOW)
     store.set_meta(conn, trip_digest.PREV_KEY, "412")
     result = trip_digest.build_text(conn, trip_config, now=NOW)
-    assert "(вчера $412, −1%)" in result.text
+    assert "(прошлая сводка $412, −1%)" in result.text
 
 
 def test_digest_without_itineraries_names_empty_stages(conn, trip_config):
@@ -96,3 +96,11 @@ def test_header_shows_departure_window(conn, trip_config):
     )
     result = trip_digest.build_text(conn, cfg, now=NOW)
     assert "Вылет 15.01–22.01" in result.text
+
+
+def test_missing_transfers_leave_no_dangling_comma(conn, trip_config):
+    records = list(BEST)
+    records[1] = _record("HKT", "SGN", "2027-01-23", 101, airline="VJ", transfers=None)
+    store.insert_prices(conn, records, now=NOW)
+    text = trip_digest.build_text(conn, trip_config, now=NOW).text
+    assert "23.01 Пхукет → Хошимин — $101 VietJet\n" in text

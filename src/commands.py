@@ -9,12 +9,13 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
 from typing import Optional
 
-from src import digest, notify, store
+from src import digest, notify, store, trip_digest
 
 LOG = logging.getLogger(__name__)
 
@@ -120,14 +121,23 @@ def _status(conn, cfg, now: str) -> str:
     rows = store.count_rows(conn)
     errors = store.get_meta(conn, "last_scan_errors", "0")
     routes = ", ".join(f"{o}→{d}" for o, d in cfg.routes())
+    if cfg.trip is not None:
+        threshold_line = f"Порог алерта маршрута: ${cfg.trip.alert_total_usd:.0f}"
+        routes_line = (
+            f"Поездка: {html.escape(trip_digest.trip_title(cfg.trip))} "
+            f"({len(cfg.routes())} пар перелётов)"
+        )
+    else:
+        threshold_line = f"Текущий порог BUY: ${cfg.abs_threshold_usd:.0f}"
+        routes_line = f"Маршруты: {routes}" if routes else "Маршруты: не заданы"
 
     lines = [
         "<b>Статус flight-sniper</b>",
         scan_line,
         f"Записей в истории: {rows}",
         f"Ошибок последнего скана: {errors}",
-        f"Текущий порог BUY: ${cfg.abs_threshold_usd:.0f}",
-        f"Маршруты: {routes}" if routes else "Маршруты: не заданы",
+        threshold_line,
+        routes_line,
     ]
     if store.get_meta(conn, "paused") == "1":
         lines.append("⏸ Бот на паузе — алерты не отправляются. /resume чтобы возобновить.")
@@ -135,6 +145,14 @@ def _status(conn, cfg, now: str) -> str:
 
 
 def _threshold(conn, cfg, args: list[str]) -> str:
+    if cfg.trip is not None:
+        # Порог поездки живёт в конфиге: /threshold меняет abs_threshold_usd,
+        # которым режим поездки не пользуется, и молча ничего бы не изменил.
+        return (
+            f"В режиме поездки алерт приходит, когда весь маршрут дешевле "
+            f"${cfg.trip.alert_total_usd:.0f}. Порог меняется в config.yaml "
+            f"(trip.alert_total_usd)."
+        )
     if not args:
         return f"Текущий порог BUY: ${cfg.abs_threshold_usd:.0f}"
 
@@ -185,6 +203,8 @@ def handle(conn, cfg, command: str, args: list[str], now: str) -> str:
     if command == "/status":
         return _status(conn, cfg, now)
     if command == "/now":
+        if cfg.trip is not None:
+            return trip_digest.build_text(conn, cfg, now=now).text
         return digest.build_digest_text(conn, cfg, now=now, force_full=True)
     if command == "/threshold":
         return _threshold(conn, cfg, args)

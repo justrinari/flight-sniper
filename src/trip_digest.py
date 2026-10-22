@@ -17,7 +17,7 @@ from src.digest import _local_date, dead_man_switch, format_age, format_delta, f
 from src.itinerary import Itinerary, Leg
 
 DISCLAIMER = "Цены из кэша Aviasales, на одного взрослого, без багажа."
-# Сумма лучшего маршрута из прошлой сводки — для строки «вчера $…».
+# Сумма лучшего маршрута из прошлой сводки — для строки «прошлая сводка $…».
 PREV_KEY = "trip_best_prev"
 
 
@@ -65,6 +65,11 @@ def stage_label(stop: Sequence[str]) -> str:
     return " / ".join(cities.name(code) for code in stop)
 
 
+def trip_title(trip) -> str:
+    """'Бали → Пхукет → Вьетнам → Филиппины → Бали'."""
+    return " → ".join(stage_label(stop) for stop in trip.stops)
+
+
 def missing_stages(legs: dict[tuple[str, str], list[Leg]], trip) -> list[str]:
     """Отрезки поездки, для которых в кэше нет ни одной свежей цены."""
     missing = []
@@ -84,14 +89,16 @@ def render_itinerary(
     head = f"{rank}. <b>${item.total_usd:.0f}</b> за взрослого"
     if prev_total:
         delta = format_delta((item.total_usd - prev_total) / prev_total)[1:-1]
-        head += f" (вчера ${prev_total:.0f}, {delta})"
+        head += f" (прошлая сводка ${prev_total:.0f}, {delta})"
     lines = [head]
     for leg in item.legs:
         route = html.escape(cities.route(leg.origin, leg.destination))
         carrier = html.escape(airlines.name(leg.airline))
+        detail = ", ".join(
+            part for part in (carrier, format_transfers(leg.transfers)) if part
+        )
         lines.append(
-            f"   {_day_month(leg.depart_date)} {route} — ${leg.landed_usd:.0f} "
-            f"{carrier}, {format_transfers(leg.transfers)}"
+            f"   {_day_month(leg.depart_date)} {route} — ${leg.landed_usd:.0f} {detail}"
         )
     oldest = min(leg.last_seen_at for leg in item.legs)
     tail = f"   {item.days} дн. · цены {format_age(oldest, now)}"
@@ -119,7 +126,7 @@ def build_text(conn: sqlite3.Connection, cfg, now: str) -> DigestResult:
     if switch:
         lines += [switch, ""]
 
-    lines.append("✈️ " + html.escape(" → ".join(stage_label(stop) for stop in trip.stops)))
+    lines.append("✈️ " + html.escape(trip_title(trip)))
     lines.append(
         f"Вылет {_departure_window(trip)} · до {trip.max_total_days} дней · "
         f"от {trip.min_stay_days} дн. в стране"
@@ -131,7 +138,7 @@ def build_text(conn: sqlite3.Connection, cfg, now: str) -> DigestResult:
         lines += ["", "Подходящих маршрутов в кэше сейчас нет."]
         missing = missing_stages(legs, trip)
         if missing:
-            lines.append("Нет ни одной цены: " + ", ".join(missing))
+            lines.append("Нет ни одной цены: " + html.escape(", ".join(missing)))
     else:
         prev_raw = store.get_meta(conn, PREV_KEY)
         prev_total = float(prev_raw) if prev_raw else None
