@@ -34,3 +34,19 @@ def test_route_builds_arrow_string():
 
 def test_route_with_unknown_code_falls_back_to_code():
     assert cities.route("BSZ", "ZZZ") == "Бишкек → ZZZ"
+
+
+def test_trip_airports_have_names():
+    assert cities.name("PQC") == "Фукуок"
+    assert cities.name("CXR") == "Нячанг"
+    assert cities.name("DAD") == "Дананг"
+    assert cities.name("MNL") == "Манила"
+    assert cities.name("CEB") == "Себу"
+    assert cities.name("MPH") == "Боракай"
+
+
+def test_country_of_airport():
+    assert cities.country("SGN") == "Вьетнам"
+    assert cities.country("mnl") == "Филиппины"
+    assert cities.country("XXX") is None
+    assert cities.country(None) is None

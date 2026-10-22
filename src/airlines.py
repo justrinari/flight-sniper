@@ -62,6 +62,15 @@ NAMES = {
     "JT": "Lion Air",
     "SL": "Thai Lion Air",
     "XJ": "Thai AirAsia X",
+    # Региональные перевозчики поездки по Юго-Восточной Азии
+    "VZ": "Thai Vietjet",
+    "VU": "Vietravel Airlines",
+    "5J": "Cebu Pacific",
+    "DG": "Cebgo",
+    "Z2": "Philippines AirAsia",
+    "PR": "Philippine Airlines",
+    "TR": "Scoot",
+    "UO": "HK Express",
 }
 
 PLACEHOLDER = "—"

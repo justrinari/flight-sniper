@@ -22,6 +22,14 @@ NAMES = {
     # Целевые направления
     "HKT": "Пхукет",
     "DPS": "Бали",
+    # Поездка Бали → Пхукет → Вьетнам → Филиппины → Бали
+    "DAD": "Дананг",
+    "PQC": "Фукуок",
+    "CXR": "Нячанг",
+    "MNL": "Манила",
+    "CEB": "Себу",
+    "MPH": "Боракай",
+    "PPS": "Пуэрто-Принсеса",
     # Хабы и пересадки, встречающиеся на маршрутах FRU/ALA → HKT/DPS
     "KUL": "Куала-Лумпур",
     "BKK": "Бангкок",
@@ -46,6 +54,23 @@ NAMES = {
     "LED": "Санкт-Петербург",
 }
 
+# Страна аэропорта — для подписи остановки поездки, где на выбор несколько
+# городов одной страны («Вьетнам», а не «Хошимин / Ханой / Дананг …»).
+COUNTRIES = {
+    "SGN": "Вьетнам",
+    "HAN": "Вьетнам",
+    "DAD": "Вьетнам",
+    "PQC": "Вьетнам",
+    "CXR": "Вьетнам",
+    "MNL": "Филиппины",
+    "CEB": "Филиппины",
+    "MPH": "Филиппины",
+    "PPS": "Филиппины",
+    "HKT": "Таиланд",
+    "BKK": "Таиланд",
+    "DPS": "Индонезия",
+}
+
 PLACEHOLDER = "—"
 
 
@@ -54,6 +79,13 @@ def name(code: Optional[str]) -> str:
     if not code:
         return PLACEHOLDER
     return NAMES.get(code.strip().upper(), code.strip().upper())
+
+
+def country(code: Optional[str]) -> Optional[str]:
+    """IATA-код → страна, если известна."""
+    if not code:
+        return None
+    return COUNTRIES.get(code.strip().upper())
 
 
 def route(origin: Optional[str], destination: Optional[str]) -> str:

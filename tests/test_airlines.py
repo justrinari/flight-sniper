@@ -19,3 +19,10 @@ def test_empty_code_returns_placeholder():
 
 def test_none_returns_placeholder():
     assert airlines.name(None) == "—"
+
+
+def test_regional_low_cost_carriers_have_names():
+    assert airlines.name("5J") == "Cebu Pacific"
+    assert airlines.name("Z2") == "Philippines AirAsia"
+    assert airlines.name("VZ") == "Thai Vietjet"
+    assert airlines.name("TR") == "Scoot"
