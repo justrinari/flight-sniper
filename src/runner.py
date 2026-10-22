@@ -90,7 +90,7 @@ def _process_alerts(conn, cfg, session, token, rates, now: str) -> tuple[int, in
         return 0, 0
 
     if cfg.trip is not None:
-        # Алерты по 30 отдельным перелётам бессмысленны: важна сумма маршрута.
+        # Алерты по десяткам отдельных перелётов бессмысленны: важна сумма маршрута.
         return _process_trip_alert(conn, cfg, session, bot_token, chat_id, now), 0
 
     candidates = rules.find_candidates(conn, cfg, now)
