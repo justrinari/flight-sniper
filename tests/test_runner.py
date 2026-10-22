@@ -59,13 +59,13 @@ def test_run_scan_writes_rows_and_stamps_meta(db, config_stub):
     responses.add(responses.GET, PRICES_URL, json=CACHE_PAYLOAD, status=200)
     result = runner.run_scan(config_stub, db_path=db, now="2026-08-01T06:00:00Z")
     conn = store.connect(db)
-    # config_stub has 2 markets; the mocked prices endpoint matches any query
-    # string and always returns the same item, so scan_all legitimately
-    # produces one distinct row per market (market is part of the row's
-    # identity in both scan_all's dedup key and the DB's unique index).
-    assert store.count_rows(conn) == 2
+    # config_stub has 4 routes and 2 markets; the mocked prices endpoint matches
+    # any query string and always returns the same item. Records are stored
+    # under the requested route (the cache may answer with a city code instead
+    # of the airport asked for), so each route × market gives one row.
+    assert store.count_rows(conn) == 8
     assert store.get_meta(conn, "last_scan_at") == "2026-08-01T06:00:00Z"
-    assert result["inserted"] == 2
+    assert result["inserted"] == 8
     assert result["errors"] == []
 
 

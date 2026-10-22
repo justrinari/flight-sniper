@@ -15,6 +15,7 @@ from typing import Optional, Sequence
 from src import airlines, cities, itinerary, store
 from src.digest import _local_date, dead_man_switch, format_age, format_delta, format_transfers
 from src.itinerary import Itinerary, Leg
+from src.sources import aviasales
 
 DISCLAIMER = "Цены из кэша Aviasales, на одного взрослого, без багажа."
 # Сумма лучшего маршрута из прошлой сводки — для строки «прошлая сводка $…».
@@ -91,6 +92,21 @@ def format_duration(minutes: Optional[int]) -> str:
     return f"{hours} ч {rest} мин"
 
 
+def _transfers_text(leg: Leg) -> str:
+    """'пересадка: Куала-Лумпур' — или просто '1 пересадка', если ссылку не разобрать."""
+    points = aviasales.transfer_points(leg.search_url, leg.transfers or 0)
+    if not points:
+        return format_transfers(leg.transfers)
+    names = []
+    for arrival, departure in points:
+        name = cities.name(arrival)
+        if arrival != departure:
+            name += f", смена аэропорта {arrival} → {departure}"
+        names.append(name)
+    label = "пересадка" if len(points) == 1 else "пересадки"
+    return f"{label}: " + "; ".join(names)
+
+
 def _with_layover(text: str, layover_min: int) -> str:
     layover = format_duration(layover_min)
     return f"{text}, из них ожидание {layover}" if layover else text
@@ -116,7 +132,7 @@ def render_itinerary(
             part
             for part in (
                 carrier,
-                format_transfers(leg.transfers),
+                _transfers_text(leg),
                 _with_layover(f"в пути {duration}", leg.layover_min) if duration else "",
             )
             if part

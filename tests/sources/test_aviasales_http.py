@@ -163,3 +163,23 @@ def test_scan_all_deduplicates_identical_offers_within_run(session, config_stub)
         for r in records
     }
     assert len(keys) == len(records)
+
+
+@responses.activate
+def test_fetch_stores_records_under_the_requested_codes(session):
+    # Запрос по аэропорту CXR, а кэш отвечает кодом города NHA. Без подмены
+    # цена ложилась в базу как HKT-NHA, а маршрут искал HKT-CXR и не находил.
+    payload = {"success": True, "data": [{**PAYLOAD["data"][0], "origin": "HKT", "destination": "NHA"}]}
+    responses.add(responses.GET, URL, json=payload, status=200)
+    records = aviasales.fetch_prices_for_dates(
+        session,
+        token="TOKEN",
+        origin="HKT",
+        destination="CXR",
+        market="kg",
+        currency="kgs",
+        departure_at="2027-01",
+        return_at=None,
+        one_way=True,
+    )
+    assert [(r.origin, r.destination) for r in records] == [("HKT", "CXR")]

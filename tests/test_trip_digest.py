@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from src import store, trip_digest
@@ -117,3 +119,20 @@ def test_missing_transfers_leave_no_dangling_comma(conn, trip_config):
 )
 def test_format_duration(minutes, expected):
     assert trip_digest.format_duration(minutes) == expected
+
+
+def test_transfer_points_are_named(conn, trip_config):
+    records = list(BEST)
+    records[0] = dataclasses.replace(
+        records[0],
+        search_url="https://www.aviasales.kg/search/DPS1801HKT1?t=AK18002928001800344400000920DPSKULHKT_7ae2&x=1",
+    )
+    records[2] = dataclasses.replace(
+        records[2],
+        transfers=1,
+        search_url="https://www.aviasales.kg/search/SGN2801MNL1?t=FD18002928001800344400000920SGNBKKDMKMNL_7ae2&x=1",
+    )
+    store.insert_prices(conn, records, now=NOW)
+    text = trip_digest.build_text(conn, trip_config, now=NOW).text
+    assert "— $86 AirAsia, пересадка: Куала-Лумпур, в пути 15 ч 20 мин" in text
+    assert "пересадка: Бангкок, смена аэропорта BKK → DMK" in text

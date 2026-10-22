@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import re
 from datetime import date, datetime, timezone
 from typing import Optional, Sequence
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -226,7 +229,45 @@ def fetch_prices_for_dates(
     if return_at and not one_way:
         params["return_at"] = return_at
     payload = _get(session, "prices_for_dates", params, token)
-    return parse_prices_for_dates(payload, market=market, currency=currency)
+    records = parse_prices_for_dates(payload, market=market, currency=currency)
+    # Кэш отвечает кодом города, даже если спросили аэропорт: на запрос
+    # HKT→CXR приходит destination NHA (Нячанг). База и сборщик маршрутов ищут
+    # цены по тем кодам, которые запрашивали, поэтому сохраняем под ними.
+    return [
+        dataclasses.replace(record, origin=origin, destination=destination)
+        for record in records
+    ]
+
+
+# Параметр t ссылки на билет: коды перевозчиков, затем цифры (время вылета,
+# прилёта, длительность), затем цепочка IATA-кодов всех аэропортов маршрута и
+# после подчёркивания хеш. Пример: AK18002928001800344400000920DPSKULHKT_7ae2….
+_CHAIN_RE = re.compile(r"\d([A-Z]{6,})_")
+
+
+def transfer_points(link: str, transfers: int) -> Optional[list[tuple[str, str]]]:
+    """Аэропорты пересадок из ссылки на билет: по паре (прилёт, вылет) на пересадку.
+
+    Разные коды в паре — смена аэропорта в одном городе (прилёт в BKK, вылет
+    из DMK). Формат ссылки нигде не описан, поэтому при любом расхождении —
+    нет параметра t, число аэропортов не сходится с числом пересадок —
+    возвращается None, и сводка пишет просто «1 пересадка».
+    """
+    if not transfers:
+        return []
+    values = parse_qs(urlparse(link or "").query).get("t")
+    if not values:
+        return None
+    match = _CHAIN_RE.search(values[0])
+    if not match or len(match.group(1)) % 3:
+        return None
+    chain = match.group(1)
+    inner = [chain[i : i + 3] for i in range(3, len(chain) - 3, 3)]
+    if len(inner) == transfers:
+        return [(code, code) for code in inner]
+    if len(inner) == 2 * transfers:
+        return list(zip(inner[::2], inner[1::2]))
+    return None
 
 
 def scan_all(session: requests.Session, token: str, cfg) -> tuple[list[PriceRecord], list[str]]:
